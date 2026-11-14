@@ -355,7 +355,7 @@ export class PropsManager {
     this.raycaster.setFromCamera(this.mouseNDC, this.sceneManager.camera);
 
     const hits = this.raycaster.intersectObjects(this.interactiveTargets, false);
-    if (hits.length > 0 && hits[0].distance < 42) {
+    if (hits.length > 0 && hits[0].distance < 75) {
       return hits[0].object.userData;
     }
     return null;

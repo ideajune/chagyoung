@@ -369,7 +369,7 @@ export class WandererManager {
       }
 
       const dist = this.camera.position.distanceTo(pt);
-      if (!isSelf && dist > 26) {
+      if (!isSelf && dist > 48) {
         labelObj.el.hidden = true;
         return;
       }
@@ -444,7 +444,7 @@ export class WandererManager {
 
       const basePos = grp.position;
       const toCamDist = this.camera.position.distanceTo(basePos);
-      if (toCamDist > 28) continue;
+      if (toCamDist > 52) continue;
 
       for (const sampleH of [0.45, 0.95, 1.42]) {
         const center = new C_ENGINE.Vector3(basePos.x, basePos.y + sampleH, basePos.z);
@@ -527,7 +527,7 @@ export class WandererManager {
     if (activeEnvGroup) {
       const envHits = this.raycaster.intersectObject(activeEnvGroup, true);
       for (const hit of envHits) {
-        if (hit.distance > 46) continue;
+        if (hit.distance > 85) continue;
         if (hit.point.y <= 5.2 && hit.point.y >= -2.2) {
           if (hit.face) {
             const worldNormal = hit.face.normal
@@ -546,7 +546,7 @@ export class WandererManager {
       const ray = this.raycaster.ray;
       if (Math.abs(ray.direction.y) > 0.001) {
         const t = (refY - ray.origin.y) / ray.direction.y;
-        if (t > 0 && t < 50) {
+        if (t > 0 && t < 90) {
           hitPoint = ray.origin.clone().addScaledVector(ray.direction, t);
         }
       }

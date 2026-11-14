@@ -1784,8 +1784,8 @@ export class BuseoksaBuilder {
     const vistaSegY = 32;
     const vistaGeo = new C_ENGINE.PlaneGeometry(1, 1, vistaSegX, vistaSegY);
     const vPos = vistaGeo.getAttribute('position');
-    const arcSpan = Math.PI * 0.62;
-    const radius = 142;
+    const arcSpan = Math.PI * 0.78;
+    const radius = 145;
     const centerZ = -4.0;
 
     for (let i = 0; i < vPos.count; i++) {

@@ -28,13 +28,17 @@ export class SceneManager {
     this.bindLifecycleEvents();
   }
 
+  getBaseFov(aspect = this.width / Math.max(1, this.height)) {
+    return aspect < 0.65 ? 64 : aspect < 0.85 ? 58 : 48;
+  }
+
   initRendererAndScene() {
     this.scene = new C_ENGINE.Scene();
-    this.scene.fog = new C_ENGINE.Fog(0xd7e4df, 42, 215);
+    this.scene.fog = new C_ENGINE.Fog(0xd7e4df, 62, 255);
 
     const aspect = this.width / Math.max(1, this.height);
-    const baseFov = aspect < 0.85 ? 58 : 48;
-    this.camera = new C_ENGINE.PerspectiveCamera(baseFov, aspect, 0.15, 450);
+    const baseFov = this.getBaseFov(aspect);
+    this.camera = new C_ENGINE.PerspectiveCamera(baseFov, aspect, 0.15, 520);
 
     // 모바일 발열 및 배터리 최적화:
     // - 고해상도 모바일 화면에서 MSAA 비활성화, 픽셀비 1.25 제한, 경량 그림자 맵(1024px) 적용
@@ -171,7 +175,7 @@ export class SceneManager {
 
     const aspect = this.width / Math.max(1, this.height);
     this.camera.aspect = aspect;
-    this.camera.fov = aspect < 0.65 ? 64 : aspect < 0.85 ? 58 : 48;
+    this.camera.fov = this.getBaseFov(aspect);
     this.camera.updateProjectionMatrix();
 
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.25 : 2));

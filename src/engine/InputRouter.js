@@ -164,6 +164,12 @@ export class InputRouter {
       } else if (code === 'KeyP') {
         e.preventDefault();
         this.callbacks.onCyclePalette?.();
+      } else if (code === 'Minus' || code === 'NumpadSubtract') {
+        e.preventDefault();
+        this.cameraController.handleWheel(180);
+      } else if (code === 'Equal' || code === 'NumpadAdd') {
+        e.preventDefault();
+        this.cameraController.handleWheel(-180);
       }
     });
 

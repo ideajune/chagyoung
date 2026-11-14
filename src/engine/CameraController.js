@@ -15,11 +15,17 @@ export class CameraController {
     this.mode = 'follow';
     this.isDragging = false;
 
-    // 3인칭 시점 상태
+    // 3인칭 시점 상태 및 광각 줌아웃 범위
     this.yaw = 0.0;
     this.pitch = 0.02;
-    this.distance = 3.65;
+    this.minDistance = 2.0;
+    this.maxDistance = 22.0;
+    this.defaultDistance = 3.65;
+    this.distance = this.defaultDistance;
+    this.wallBlockedRatio = 0;
+    this.currentFov = this.camera ? this.camera.fov : 48;
     this.camInitialized = false;
+    this.fovInitialized = false;
 
     // 현재 보간된 카메라 위치 및 시선 목표점
     this.camPos = new C_ENGINE.Vector3(0, 2.55, 8.5);
@@ -52,6 +58,7 @@ export class CameraController {
     this.mode = 'follow';
     if (immediate) {
       this.camInitialized = false;
+      this.fovInitialized = false;
     }
   }
 
@@ -95,31 +102,44 @@ export class CameraController {
     this.yaw += camAngleDiff * (1 - Math.exp(-dt * 2.6));
   }
 
+  getZoomOutProgress() {
+    return Math.max(
+      0,
+      Math.min(1, (this.distance - 3.8) / Math.max(1, this.maxDistance - 3.8))
+    );
+  }
+
   handleDrag(dx, dy, isTouch = false) {
     if (this.mode === 'lanternFocus') {
-      this.targetYawOffset = Math.max(-0.68, Math.min(0.68, this.targetYawOffset - dx * 0.0028));
+      this.targetYawOffset = Math.max(-0.85, Math.min(0.85, this.targetYawOffset - dx * 0.0028));
       this.targetPitchOffset = Math.max(
-        -0.32,
-        Math.min(0.36, this.targetPitchOffset - dy * 0.0022)
+        -0.36,
+        Math.min(0.42, this.targetPitchOffset - dy * 0.0022)
       );
       return;
     }
 
     const rotSpeed = isTouch ? 0.0068 : 0.0055;
+    const maxPitch = 0.36 + this.getZoomOutProgress() * 0.30;
     this.yaw -= dx * rotSpeed;
-    this.pitch = Math.max(-0.22, Math.min(0.34, this.pitch + dy * 0.0038));
+    this.pitch = Math.max(-0.22, Math.min(maxPitch, this.pitch + dy * 0.0038));
   }
 
   handleWheel(deltaY) {
     if (this.mode === 'lanternFocus') {
+      const focusScale = 1 + Math.max(0, this.targetZoomOffset) * 0.05;
       this.targetZoomOffset = Math.max(
         -3.2,
-        Math.min(4.8, this.targetZoomOffset + deltaY * 0.0035)
+        Math.min(11.5, this.targetZoomOffset + deltaY * 0.0038 * focusScale)
       );
       return;
     }
 
-    this.distance = Math.max(2.1, Math.min(9.5, this.distance + deltaY * 0.0028));
+    const zoomScale = 1 + Math.max(0, this.distance - 4.5) * 0.065;
+    this.distance = Math.max(
+      this.minDistance,
+      Math.min(this.maxDistance, this.distance + deltaY * 0.0032 * zoomScale)
+    );
   }
 
   beginPinch() {
@@ -128,20 +148,136 @@ export class CameraController {
 
   updatePinch(pixelDelta) {
     if (this.mode === 'lanternFocus') {
-      const zoomDelta = pixelDelta * 0.025;
-      this.targetZoomOffset = Math.max(-3.2, Math.min(4.8, this.pinchBaseValue + zoomDelta));
+      const zoomDelta = pixelDelta * 0.028;
+      this.targetZoomOffset = Math.max(-3.2, Math.min(11.5, this.pinchBaseValue + zoomDelta));
       return;
     }
 
-    const distDelta = pixelDelta * 0.012;
-    this.distance = Math.max(2.1, Math.min(9.0, this.pinchBaseValue + distDelta));
+    const pinchScale = 1 + Math.max(0, this.pinchBaseValue - 4.5) * 0.06;
+    const distDelta = pixelDelta * 0.016 * pinchScale;
+    this.distance = Math.max(
+      this.minDistance,
+      Math.min(this.maxDistance, this.pinchBaseValue + distDelta)
+    );
+  }
+
+  /**
+   * 2D 선분(캐릭터 -> 희망 카메라 좌표)이 청풍사 본전 4면 벽체를 관통하지 않도록 슬랩 교차 보정
+   */
+  clipRayAgainstHall(sx, sz, cx, cz) {
+    const hall = MURYANGSUJEON_CONFIG.hallCollisionBox;
+    const pad = 0.50;
+    const hMinX = hall.minX - pad;
+    const hMaxX = hall.maxX + pad;
+    const hMinZ = hall.minZ - pad;
+    const hMaxZ = hall.maxZ + pad;
+
+    const dx = cx - sx;
+    const dz = cz - sz;
+    let tMin = 0.0;
+    let tMax = 1.0;
+
+    if (Math.abs(dx) < 1e-6) {
+      if (sx <= hMinX || sx >= hMaxX) {
+        return { x: cx, z: cz, blockedRatio: 0 };
+      }
+    } else {
+      const invDx = 1.0 / dx;
+      let tx1 = (hMinX - sx) * invDx;
+      let tx2 = (hMaxX - sx) * invDx;
+      if (tx1 > tx2) {
+        const tmp = tx1;
+        tx1 = tx2;
+        tx2 = tmp;
+      }
+      tMin = Math.max(tMin, tx1);
+      tMax = Math.min(tMax, tx2);
+    }
+
+    if (Math.abs(dz) < 1e-6) {
+      if (sz <= hMinZ || sz >= hMaxZ) {
+        return { x: cx, z: cz, blockedRatio: 0 };
+      }
+    } else {
+      const invDz = 1.0 / dz;
+      let tz1 = (hMinZ - sz) * invDz;
+      let tz2 = (hMaxZ - sz) * invDz;
+      if (tz1 > tz2) {
+        const tmp = tz1;
+        tz1 = tz2;
+        tz2 = tmp;
+      }
+      tMin = Math.max(tMin, tz1);
+      tMax = Math.min(tMax, tz2);
+    }
+
+    if (tMax > tMin && tMin < 1.0 && tMax > 0.0) {
+      const safeT = Math.max(0.06, tMin * 0.96);
+      return {
+        x: sx + dx * safeT,
+        z: sz + dz * safeT,
+        blockedRatio: Math.max(0, 1.0 - safeT)
+      };
+    }
+
+    return { x: cx, z: cz, blockedRatio: 0 };
+  }
+
+  /**
+   * 직사각형 처마 영영 내·외부 부드러운 가중치 산출 (처마/현판/연등 간섭 방지용)
+   */
+  computeSmoothRectWeight(x, z, minX, maxX, minZ, maxZ, feather = 2.0) {
+    const dx = Math.max(minX - x, 0, x - maxX);
+    const dz = Math.max(minZ - z, 0, z - maxZ);
+    const outDist = Math.hypot(dx, dz);
+    if (outDist <= 0) return 1.0;
+    if (outDist >= feather) return 0.0;
+    const s = outDist / feather;
+    return 1.0 - s * s * (3.0 - 2.0 * s);
+  }
+
+  /**
+   * 줌아웃 거리 변화에 맞춰 원근 왜곡 없이 시원한 광각 파노라마 시야(FOV)를 부드럽게 확장
+   */
+  updateDynamicFov(dt) {
+    if (!this.camera) return;
+    const aspect = this.sceneManager.width / Math.max(1, this.sceneManager.height);
+    const baseFov = this.sceneManager.getBaseFov
+      ? this.sceneManager.getBaseFov(aspect)
+      : (aspect < 0.65 ? 64 : aspect < 0.85 ? 58 : 48);
+
+    let extraFov = 0;
+    if (this.mode === 'lanternFocus') {
+      const focusWideT = Math.max(0, Math.min(1, this.zoomOffset / 11.5));
+      const maxFocusAdd = aspect < 0.85 ? 9 : 13;
+      extraFov = (1 - Math.pow(1 - focusWideT, 1.5)) * maxFocusAdd;
+    } else {
+      const zoomOutT = this.getZoomOutProgress();
+      const easedWide = 1 - Math.pow(1 - zoomOutT, 1.55);
+      const maxFollowAdd = aspect < 0.65 ? 11 : aspect < 0.85 ? 13 : 16;
+      const wallReliefAdd = this.wallBlockedRatio * zoomOutT * (aspect < 0.85 ? 3.5 : 5.5);
+      extraFov = easedWide * maxFollowAdd + wallReliefAdd;
+    }
+
+    const targetFov = Math.min(78, baseFov + extraFov);
+    const fovSmooth = this.fovInitialized ? 1 - Math.exp(-dt * 10) : 1.0;
+    this.fovInitialized = true;
+    this.currentFov = this.camera.fov + (targetFov - this.camera.fov) * fovSmooth;
+
+    if (Math.abs(this.camera.fov - this.currentFov) > 0.015) {
+      this.camera.fov = this.currentFov;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   update(elapsed, dt) {
     if (this.mode === 'lanternFocus') {
+      this.wallBlockedRatio = 0;
+      this.updateDynamicFov(dt);
       this.updateLanternFocusCamera(elapsed, dt);
     } else {
       this.updateFollowCamera(dt);
+      this.updateDynamicFov(dt);
     }
   }
 
@@ -154,66 +290,93 @@ export class CameraController {
     const isMobileScreen =
       window.innerWidth <= 768 || (this.camera && this.camera.aspect < 0.88);
 
+    const zoomOutT = this.getZoomOutProgress();
+    const maxPitch = 0.36 + zoomOutT * 0.30;
+    if (this.pitch > maxPitch) {
+      this.pitch += (maxPitch - this.pitch) * (1 - Math.exp(-dt * 8));
+    }
+
     const sinYaw = Math.sin(this.yaw);
     const cosYaw = Math.cos(this.yaw);
 
-    const effectiveDist = isMobileScreen ? this.distance * 0.86 : this.distance;
+    // 모바일에서도 근접 시야 비율(0.86)은 유지하되, 줌아웃 시에는 데스크톱과 동일한 전경 거리까지 확장
+    const mobileDistScale = isMobileScreen ? 0.86 + 0.14 * Math.min(1, zoomOutT * 1.4) : 1.0;
+    const effectiveDist = this.distance * mobileDistScale;
+
     const camHeightOffset = isMobileScreen
       ? (posture === 'walk' ? 1.62 : 1.32)
       : (posture === 'walk' ? 1.88 : 1.48);
     const lookHeightOffset = isMobileScreen
       ? (posture === 'walk' ? 0.54 : 0.68)
       : (posture === 'walk' ? 1.13 : 1.24);
-    const extraZoomHeight = Math.max(0, effectiveDist - 3.3) * 0.22;
 
-    let desiredCamX = selfPos.x + sinYaw * effectiveDist;
-    const desiredCamY = selfPos.y + camHeightOffset + extraZoomHeight + this.pitch * 3.0;
-    let desiredCamZ = selfPos.z + cosYaw * effectiveDist;
+    // 줌아웃 구간에 따라 자연스러운 시점 고도 상승 (중거리 완만 -> 원거리 산사 전경 부감 시점)
+    const midSpan = Math.max(0, effectiveDist - 3.3);
+    const wideSpan = Math.max(0, effectiveDist - 7.5);
+    const extraZoomHeight = midSpan * 0.25 + Math.pow(wideSpan, 1.15) * 0.18;
 
-    // 무량수전 4면 벽체 내부로 카메라가 파고들지 않도록 광선 슬라이딩 보정
-    const hall = MURYANGSUJEON_CONFIG.hallCollisionBox;
-    const pad = 0.42;
-    const hMinX = hall.minX - pad;
-    const hMaxX = hall.maxX + pad;
-    const hMinZ = hall.minZ - pad;
-    const hMaxZ = hall.maxZ + pad;
+    const rawCamX = selfPos.x + sinYaw * effectiveDist;
+    const rawCamZ = selfPos.z + cosYaw * effectiveDist;
 
-    if (
-      desiredCamX > hMinX &&
-      desiredCamX < hMaxX &&
-      desiredCamZ > hMinZ &&
-      desiredCamZ < hMaxZ &&
-      desiredCamY < 7.2
-    ) {
-      const rayDx = desiredCamX - selfPos.x;
-      const rayDz = desiredCamZ - selfPos.z;
-      let tEnter = 1.0;
-      if (Math.abs(rayDx) > 1e-4) {
-        const tx1 = (hMinX - selfPos.x) / rayDx;
-        const tx2 = (hMaxX - selfPos.x) / rayDx;
-        const tNearX = Math.min(tx1, tx2);
-        if (tNearX >= 0 && tNearX < tEnter) {
-          const zAtX = selfPos.z + rayDz * tNearX;
-          if (zAtX >= hMinZ && zAtX <= hMaxZ) tEnter = tNearX;
-        }
-      }
-      if (Math.abs(rayDz) > 1e-4) {
-        const tz1 = (hMinZ - selfPos.z) / rayDz;
-        const tz2 = (hMaxZ - selfPos.z) / rayDz;
-        const tNearZ = Math.min(tz1, tz2);
-        if (tNearZ >= 0 && tNearZ < tEnter) {
-          const xAtZ = selfPos.x + rayDx * tNearZ;
-          if (xAtZ >= hMinX && xAtZ <= hMaxX) tEnter = tNearZ;
-        }
-      }
-      const safeT = Math.max(0.18, tEnter * 0.92);
-      desiredCamX = selfPos.x + rayDx * safeT;
-      desiredCamZ = selfPos.z + rayDz * safeT;
+    // 청풍사 본전 4면 벽체 관통 방지 슬랩 보정
+    const clipped = this.clipRayAgainstHall(selfPos.x, selfPos.z, rawCamX, rawCamZ);
+    const desiredCamX = clipped.x;
+    const desiredCamZ = clipped.z;
+    this.wallBlockedRatio = clipped.blockedRatio;
+
+    const pitchSpan = 3.0 + zoomOutT * 2.2;
+    const wallReliefLift = this.wallBlockedRatio * zoomOutT * 1.55;
+    let desiredCamY =
+      selfPos.y + camHeightOffset + extraZoomHeight + wallReliefLift + this.pitch * pitchSpan;
+
+    // 1) 청풍사 겹처마·현판 하단 여유 고도 소프트 클램프 (처마 범위 z>=3.15 진입 시에만 작동하여 앞마당 부감 시점 보존)
+    const muryangEaveWeight = this.computeSmoothRectWeight(
+      desiredCamX,
+      desiredCamZ,
+      -19.1,
+      19.1,
+      3.15,
+      17.75,
+      0.60
+    );
+    if (muryangEaveWeight > 0 && desiredCamY > 3.92) {
+      desiredCamY += (3.92 - desiredCamY) * muryangEaveWeight;
     }
 
-    const lookTargetX = selfPos.x - sinYaw * 3.0;
-    const lookTargetY = selfPos.y + lookHeightOffset - this.pitch * 1.7;
-    const lookTargetZ = selfPos.z - cosYaw * 3.0;
+    // 2) 차경루 처마·소원 연등·현판 하단 여유 고도 소프트 클램프 (마당->누각 진입 구간 부드러운 전이)
+    const anyangEaveWeight = this.computeSmoothRectWeight(
+      desiredCamX,
+      desiredCamZ,
+      -19.6,
+      19.6,
+      -25.4,
+      -13.6,
+      4.2
+    );
+    if (anyangEaveWeight > 0 && desiredCamY > 2.98) {
+      desiredCamY += (2.98 - desiredCamY) * anyangEaveWeight;
+    }
+
+    // 3) 마당·기단·외곽 산자락 지형 바닥 최소 안전 고도 보장
+    let floorY = -0.82;
+    if (desiredCamZ < -25.0) {
+      floorY = -0.82 - Math.min(5.2, (-25.0 - desiredCamZ) * 0.2);
+    } else {
+      const sideDist = Math.max(0, Math.abs(desiredCamX) - 22.0);
+      floorY = -0.82 + Math.min(7.5, Math.pow(sideDist * 0.075, 1.35) * 4.4);
+    }
+    if (Math.abs(desiredCamX) < 17.2 && desiredCamZ >= 5.4 && desiredCamZ <= 15.8) {
+      floorY = Math.max(floorY, 0.20);
+    } else if (Math.abs(desiredCamX) < 16.5 && desiredCamZ >= -23.8 && desiredCamZ <= -15.2) {
+      floorY = Math.max(floorY, 0.08);
+    }
+    desiredCamY = Math.max(floorY + 0.65, desiredCamY);
+
+    const lookAheadDist = 3.0 + zoomOutT * 2.4 + this.wallBlockedRatio * zoomOutT * 1.4;
+    const lookTargetX = selfPos.x - sinYaw * lookAheadDist;
+    const lookTargetY =
+      selfPos.y + lookHeightOffset - zoomOutT * 0.35 - this.pitch * (1.7 + zoomOutT * 0.6);
+    const lookTargetZ = selfPos.z - cosYaw * lookAheadDist;
 
     const camSmooth = this.camInitialized ? 1 - Math.exp(-dt * 12) : 1.0;
     this.camInitialized = true;
