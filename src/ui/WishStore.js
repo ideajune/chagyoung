@@ -4,10 +4,52 @@
 
 import { STORAGE_KEYS, INITIAL_WISHES } from '../config/constants.js';
 
+const LEGACY_KEYS = [
+  'chakyeong_3d_wishes_v1',
+  'chakyeong_3d_wishes_v2',
+  'chakyeong_3d_hapjang_v1',
+  'chakyeong_3d_hapjang_v2'
+];
+
+function sanitizeTempleTerms(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/영주\s*부석사/g, '청풍사')
+    .replace(/부석사/g, '청풍사')
+    .replace(/무량수전/g, '청풍사')
+    .replace(/무량한/g, '맑은')
+    .replace(/안양루/g, '차경루')
+    .replace(/안양문/g, '차경루')
+    .replace(/소백산맥/g, '운해 능선')
+    .replace(/소백산/g, '운해 능선');
+}
+
+function sanitizeWishItem(wish) {
+  if (!wish || typeof wish !== 'object') return wish;
+  return {
+    ...wish,
+    space: 'cheongpungsa',
+    author: sanitizeTempleTerms(wish.author),
+    tag: sanitizeTempleTerms(wish.tag),
+    text: sanitizeTempleTerms(wish.text)
+  };
+}
+
 export class WishStore {
   constructor() {
+    this.purgeLegacyStorage();
     this.wishes = this.loadWishes();
     this.likedWishIds = this.loadLikedWishes();
+  }
+
+  purgeLegacyStorage() {
+    try {
+      for (const key of LEGACY_KEYS) {
+        localStorage.removeItem(key);
+      }
+    } catch {
+      // ignore storage errors
+    }
   }
 
   loadWishes() {
@@ -16,18 +58,32 @@ export class WishStore {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          const filtered = parsed.filter((w) => !w.space || w.space === 'buseoksa');
+          const filtered = parsed.filter(
+            (w) => !w.space || w.space === 'cheongpungsa' || w.space === 'buseoksa'
+          );
           if (filtered.length > 0) {
-            // 기존 저장 데이터(사용자 작성 연등 및 합장 수)를 보존하면서 기본 시드 연등(bs-1..bs-16)의 명칭·문구 최신화 및 병합
             const seedMap = new Map(INITIAL_WISHES.map((s) => [s.id, s]));
             let updatedAny = false;
+
             const refreshed = filtered.map((w) => {
               const seed = seedMap.get(w.id);
-              if (seed && (w.author !== seed.author || w.text !== seed.text)) {
-                updatedAny = true;
-                return { ...w, author: seed.author, text: seed.text };
+              if (seed) {
+                if (w.author !== seed.author || w.text !== seed.text || w.space !== 'cheongpungsa') {
+                  updatedAny = true;
+                  return { ...w, space: 'cheongpungsa', author: seed.author, text: seed.text };
+                }
+                return w;
               }
-              return w;
+              const cleaned = sanitizeWishItem(w);
+              if (
+                cleaned.author !== w.author ||
+                cleaned.text !== w.text ||
+                cleaned.tag !== w.tag ||
+                cleaned.space !== w.space
+              ) {
+                updatedAny = true;
+              }
+              return cleaned;
             });
 
             const existingIds = new Set(refreshed.map((w) => w.id));
@@ -38,8 +94,8 @@ export class WishStore {
               }
             }
             if (mergedDefaults.length > 0 || updatedAny) {
-              const userCustom = refreshed.filter((w) => !String(w.id).startsWith('bs-'));
-              const savedSeeds = refreshed.filter((w) => String(w.id).startsWith('bs-'));
+              const userCustom = refreshed.filter((w) => !String(w.id).startsWith('cp-'));
+              const savedSeeds = refreshed.filter((w) => String(w.id).startsWith('cp-'));
               const combined = [...savedSeeds, ...mergedDefaults, ...userCustom];
               try {
                 localStorage.setItem(STORAGE_KEYS.WISHES, JSON.stringify(combined));
@@ -85,7 +141,9 @@ export class WishStore {
   }
 
   getWishes() {
-    return this.wishes.filter((w) => !w.space || w.space === 'buseoksa');
+    return this.wishes.filter(
+      (w) => !w.space || w.space === 'cheongpungsa' || w.space === 'buseoksa'
+    );
   }
 
   getWishById(wishId) {
@@ -102,16 +160,16 @@ export class WishStore {
       now.getDate()
     ).padStart(2, '0')}`;
 
-    const newWish = {
+    const newWish = sanitizeWishItem({
       id: `wish-${Date.now()}`,
-      space: 'buseoksa',
+      space: 'cheongpungsa',
       color: color || 'amber',
       author: author || '산사 나그네',
       tag: tag || '마음 평안',
       text,
       date: dateStr,
       hapjang: 1
-    };
+    });
 
     this.wishes.push(newWish);
     this.saveWishes();

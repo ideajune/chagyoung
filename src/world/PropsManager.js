@@ -176,7 +176,9 @@ export class PropsManager {
       (obj) => obj.userData?.type === 'windbell'
     );
 
-    const spaceWishes = allWishes.filter((w) => !w.space || w.space === 'buseoksa');
+    const spaceWishes = allWishes.filter(
+      (w) => !w.space || w.space === 'cheongpungsa' || w.space === 'buseoksa'
+    );
     const total = spaceWishes.length;
     if (total === 0) return;
 

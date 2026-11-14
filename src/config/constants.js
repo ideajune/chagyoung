@@ -3,9 +3,9 @@
  */
 
 export const STORAGE_KEYS = {
-  WISHES: 'chakyeong_3d_wishes_v2',
-  HAPJANG: 'chakyeong_3d_hapjang_v2',
-  WANDERER_PROFILE: 'chakyeong_3d_wanderer_nature_v2'
+  WISHES: 'cheongpungsa_3d_wishes_v1',
+  HAPJANG: 'cheongpungsa_3d_hapjang_v1',
+  WANDERER_PROFILE: 'cheongpungsa_3d_wanderer_v1'
 };
 
 export const SPACE_META = {
@@ -30,19 +30,19 @@ export const LANTERN_COLORS = {
 
 export const INITIAL_WISHES = [
   {
-    id: 'bs-1',
-    space: 'buseoksa',
+    id: 'cp-1',
+    space: 'cheongpungsa',
     color: 'amber',
     author: '청풍산 나그네',
     tag: '마음 평안',
-    text: '청풍사 배흘림기둥에 기대어 바라본 능선처럼, 흔들리는 마음도 묵묵히 제자리를 찾기를 바랍니다.',
+    text: '청풍사 고요한 마당에서 바라본 아득한 운해 능선처럼, 흔들리는 마음도 묵묵히 제자리를 찾기를 바랍니다.',
     date: '2026.10.29',
     hapjang: 64,
     slot: 0
   },
   {
-    id: 'bs-2',
-    space: 'buseoksa',
+    id: 'cp-2',
+    space: 'cheongpungsa',
     color: 'lotus',
     author: '가을 순례자',
     tag: '가족 건강',
@@ -52,8 +52,8 @@ export const INITIAL_WISHES = [
     slot: 1
   },
   {
-    id: 'bs-3',
-    space: 'buseoksa',
+    id: 'cp-3',
+    space: 'cheongpungsa',
     color: 'moon',
     author: '새벽별',
     tag: '소망 성취',
@@ -63,30 +63,30 @@ export const INITIAL_WISHES = [
     slot: 2
   },
   {
-    id: 'bs-4',
-    space: 'buseoksa',
+    id: 'cp-4',
+    space: 'cheongpungsa',
     color: 'jade',
     author: '청산에 살어리',
     tag: '오늘의 감사',
-    text: '처마 끝 풍경 소리에 잠시 멈춰 숨을 고를 수 있는 오늘 하루의 여백에 깊이 감사합니다.',
+    text: '청풍사 처마 끝 풍경 소리에 잠시 멈춰 숨을 고를 수 있는 오늘 하루의 여백에 깊이 감사합니다.',
     date: '2026.11.01',
     hapjang: 78,
     slot: 3
   },
   {
-    id: 'bs-5',
-    space: 'buseoksa',
+    id: 'cp-5',
+    space: 'cheongpungsa',
     color: 'amber',
     author: '차경루 달빛',
     tag: '인연과 사랑',
-    text: '멀리 떨어져 있어도 같은 하늘의 노을을 보며 서로의 안녕을 빌어주는 따뜻한 인연이기를.',
+    text: '차경루 처마 너머로 붉게 물드는 노을을 보며, 멀리 있는 소중한 이들의 안녕을 조용히 빌어봅니다.',
     date: '2026.11.01',
     hapjang: 112,
     slot: 4
   },
   {
-    id: 'bs-6',
-    space: 'buseoksa',
+    id: 'cp-6',
+    space: 'cheongpungsa',
     color: 'lotus',
     author: '풍경소리',
     tag: '마음 평안',
@@ -96,8 +96,8 @@ export const INITIAL_WISHES = [
     slot: 5
   },
   {
-    id: 'bs-7',
-    space: 'buseoksa',
+    id: 'cp-7',
+    space: 'cheongpungsa',
     color: 'jade',
     author: '운해 위의 솔',
     tag: '가족 건강',
@@ -107,8 +107,8 @@ export const INITIAL_WISHES = [
     slot: 6
   },
   {
-    id: 'bs-8',
-    space: 'buseoksa',
+    id: 'cp-8',
+    space: 'cheongpungsa',
     color: 'moon',
     author: '고운 발걸음',
     tag: '소망 성취',
@@ -118,19 +118,19 @@ export const INITIAL_WISHES = [
     slot: 7
   },
   {
-    id: 'bs-9',
-    space: 'buseoksa',
+    id: 'cp-9',
+    space: 'cheongpungsa',
     color: 'amber',
-    author: '박석길 순례자',
+    author: '청풍사 순례자',
     tag: '오늘의 감사',
-    text: '비 온 뒤 더욱 맑아진 산사의 공기처럼, 지나간 아픔도 내일을 비추는 지혜가 되었음에 감사합니다.',
+    text: '비 온 뒤 더욱 맑아진 청풍사의 솔바람처럼, 지나간 아픔도 내일을 비추는 지혜가 되었음에 감사합니다.',
     date: '2026.11.05',
     hapjang: 94,
     slot: 8
   },
   {
-    id: 'bs-10',
-    space: 'buseoksa',
+    id: 'cp-10',
+    space: 'cheongpungsa',
     color: 'lotus',
     author: '봄을 기다리는 나무',
     tag: '인연과 사랑',
@@ -140,8 +140,8 @@ export const INITIAL_WISHES = [
     slot: 9
   },
   {
-    id: 'bs-11',
-    space: 'buseoksa',
+    id: 'cp-11',
+    space: 'cheongpungsa',
     color: 'jade',
     author: '푸른 대숲',
     tag: '마음 평안',
@@ -151,8 +151,8 @@ export const INITIAL_WISHES = [
     slot: 10
   },
   {
-    id: 'bs-12',
-    space: 'buseoksa',
+    id: 'cp-12',
+    space: 'cheongpungsa',
     color: 'moon',
     author: '별빛 산책자',
     tag: '소망 성취',
@@ -162,8 +162,8 @@ export const INITIAL_WISHES = [
     slot: 11
   },
   {
-    id: 'bs-13',
-    space: 'buseoksa',
+    id: 'cp-13',
+    space: 'cheongpungsa',
     color: 'amber',
     author: '가을 햇살',
     tag: '가족 건강',
@@ -173,19 +173,19 @@ export const INITIAL_WISHES = [
     slot: 12
   },
   {
-    id: 'bs-14',
-    space: 'buseoksa',
+    id: 'cp-14',
+    space: 'cheongpungsa',
     color: 'lotus',
     author: '은은한 다향',
     tag: '오늘의 감사',
-    text: '바쁜 일상 속에서도 잠시 하늘과 능선을 올려다볼 수 있는 마음의 창을 갖게 해 주셔서 고맙습니다.',
+    text: '바쁜 일상 속에서도 차경루에 앉아 잠시 하늘과 구름바다를 올려다볼 수 있는 마음의 창을 갖게 해 주소서.',
     date: '2026.11.10',
     hapjang: 61,
     slot: 13
   },
   {
-    id: 'bs-15',
-    space: 'buseoksa',
+    id: 'cp-15',
+    space: 'cheongpungsa',
     color: 'jade',
     author: '산사의 아침',
     tag: '인연과 사랑',
@@ -195,12 +195,12 @@ export const INITIAL_WISHES = [
     slot: 14
   },
   {
-    id: 'bs-16',
-    space: 'buseoksa',
+    id: 'cp-16',
+    space: 'cheongpungsa',
     color: 'moon',
-    author: '무량한 미소',
+    author: '맑은 솔바람',
     tag: '마음 평안',
-    text: '오늘 이 등불을 바라보는 모든 분들의 가슴속에 청풍사의 너른 품 같은 평화가 가득 깃들기를.',
+    text: '오늘 차경루의 등불을 바라보는 모든 분들의 가슴속에 청풍사의 너른 품 같은 평화가 가득 깃들기를.',
     date: '2026.11.14',
     hapjang: 99,
     slot: 15
