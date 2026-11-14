@@ -1,0 +1,11 @@
+{
+  "name": "view-mung-chakyeong-3d",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "산사 View-mung — 청풍사(淸風寺) · 차경루(借景樓) 3D 차경 힐링 웹",
+  "private": true,
+  "scripts": {
+    "dev": "npx --yes http-server -p 8080 -c-1 --cors -o",
+    "start": "npx --yes http-server -p 8080 -c-1 --cors"
+  }
+}

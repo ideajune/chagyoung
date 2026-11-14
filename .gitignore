@@ -1,0 +1,21 @@
+# Dependencies & build/deploy artifacts
+node_modules/
+.vercel/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local reference projects & personal memos
+sansa-view/
+부석사_사진/
+*.doc
+*.docx
+개발 수정사항.txt
+
+# Unused local reference images (replaced by assets/environment/mountain-vista.jpg & procedural plaques)
+무량수전 사각 간판.png
+무량수전.jpg
+부석사 소백산맥 원거리 배경.jpg
+안양루 간판.png
+안양루 지붕.jpg
