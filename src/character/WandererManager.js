@@ -393,7 +393,6 @@ export class WandererManager {
       entry.actor.greet(now);
     }
 
-    this.spawnBubbleAbove(entry.actor.group, '🙏 평안하신지요', 2.6);
     this.spawnGroundRipple(
       entry.actor.group.position,
       entry.palette?.markerHex || 0x98f5c4
@@ -931,7 +930,6 @@ export class WandererManager {
       this.selfActor.greet(now);
     }
 
-    this.spawnBubbleAbove(this.selfActor.group, '🙏 평안하신지요', 2.6);
     this.spawnGroundRipple(
       this.selfActor.group.position,
       this.currentPalette.markerHex || 0xffd27d
@@ -946,16 +944,10 @@ export class WandererManager {
         setTimeout(() => {
           if (!npc.actor || !npc.actor.group?.visible) return;
           npc.actor.greet((this.lastElapsed || 0) + 0.35);
-          const replies = ['🙏 성불하십시오', '🎋 좋은 바람입니다', '🍵 평안한 산책 되소서'];
-          this.spawnBubbleAbove(npc.actor.group, replies[idx % replies.length], 2.5);
           this.spawnGroundRipple(npc.actor.group.position, 0x98f5c4);
         }, 360 + idx * 280);
       });
     }
-
-    this.callbacks.onToast?.(
-      `🙏 '${this.profile.name}'님이 걸음을 멈추고 두 손을 모아 합장 인사를 건넵니다.`
-    );
   }
 
   enterAnyangruMeditation() {

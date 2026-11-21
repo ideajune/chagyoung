@@ -303,7 +303,7 @@ export class HudController {
       .getElementById('manual-bell-btn')
       ?.addEventListener('click', () => this.triggerBellRingInteraction());
 
-    ['bell', 'water', 'wind'].forEach((type) => {
+    ['water', 'wind'].forEach((type) => {
       const slider = document.getElementById(`slider-${type}`);
       if (!slider) return;
       slider.addEventListener('input', () => {

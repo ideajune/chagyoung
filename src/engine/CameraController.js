@@ -170,7 +170,7 @@ export class CameraController {
     // 전면 열린 중앙 3칸 출입구(어칸·좌우 협칸) 폭: 문턱 출입 시 카메라가 벽에 걸려 튀지 않도록 통과 허용
     const doorwayHalfX = 7.8;
 
-    // 1) 캐릭터가 청풍사 실내에 들어와 있을 때
+    // 1) 캐릭터가 청풍사 실내에 들어와 있을 때: 줌아웃 시에도 카메라가 4면 벽체·출입구 밖으로 절대 벗어나지 않도록 엄격히 실내 유지
     if (
       hallInt &&
       sx >= hallInt.minX - 0.25 &&
@@ -178,11 +178,10 @@ export class CameraController {
       sz >= hallInt.minZ &&
       sz <= hallInt.maxZ + 0.25
     ) {
-      const clampedX = Math.max(hallInt.minX + 0.55, Math.min(hallInt.maxX - 0.55, cx));
-      // 전면 열린 출입구(|x| <= 7.8) 쪽으로 나가는 시선은 문턱에서 급격히 끊기지 않도록 자연스럽게 통과 허용
-      const throughOpenDoorway = Math.abs(clampedX) <= doorwayHalfX && Math.abs(sx) <= doorwayHalfX + 0.5;
-      const minAllowedZ = throughOpenDoorway ? Math.min(cz, hallInt.minZ + 0.35) : hallInt.minZ + 0.35;
-      const clampedZ = Math.max(minAllowedZ, Math.min(hallInt.maxZ - 0.35, cz));
+      const padX = 0.65;
+      const padZ = 0.55;
+      const clampedX = Math.max(hallInt.minX + padX, Math.min(hallInt.maxX - padX, cx));
+      const clampedZ = Math.max(hallInt.minZ + padZ, Math.min(hallInt.maxZ - padZ, cz));
       const changed = Math.abs(clampedX - cx) > 0.01 || Math.abs(clampedZ - cz) > 0.01;
       return {
         x: clampedX,
@@ -370,10 +369,16 @@ export class CameraController {
 
     const pitchSpan = 3.0 + zoomOutT * 2.2;
     const wallReliefLift = clipped.insideHall ? 0 : this.wallBlockedRatio * zoomOutT * 1.55;
+    const actualCamDist = Math.hypot(desiredCamX - selfPos.x, desiredCamZ - selfPos.z);
+    const hallExtraZoomHeight = Math.max(0, actualCamDist - 3.3) * 0.22;
     let desiredCamY =
-      selfPos.y + camHeightOffset + extraZoomHeight + wallReliefLift + this.pitch * pitchSpan;
+      selfPos.y +
+      camHeightOffset +
+      (clipped.insideHall ? hallExtraZoomHeight : extraZoomHeight) +
+      wallReliefLift +
+      this.pitch * pitchSpan;
     if (clipped.insideHall) {
-      desiredCamY = Math.min(desiredCamY, 6.65);
+      desiredCamY = Math.min(desiredCamY, 5.45);
     }
 
     // 1) 청풍사 겹처마·현판 하단 여유 고도 소프트 클램프 (처마 범위 z>=3.15 진입 시에만 작동하여 앞마당 부감 시점 보존)

@@ -350,7 +350,7 @@ export function equipWandererActor(actor, palette, isSelf = false, initialMode =
 }
 
 export function applyWiderWalkingStride(actor, normalizedSpeed) {
-  if (!actor || !actor.group || normalizedSpeed <= 0.02) return;
+  if (!actor || !actor.group || actor.isProceduralMonk || normalizedSpeed <= 0.02) return;
   const motion = actor.captureMotion ? actor.captureMotion() : null;
   if (motion && (motion.mode !== 'walk' || motion.stance < 0.25)) return;
 
