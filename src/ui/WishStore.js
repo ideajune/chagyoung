@@ -161,7 +161,7 @@ export class WishStore {
     ).padStart(2, '0')}`;
 
     const newWish = sanitizeWishItem({
-      id: `wish-${Date.now()}`,
+      id: `wish-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       space: 'cheongpungsa',
       color: color || 'amber',
       author: author || '산사 나그네',
@@ -184,6 +184,59 @@ export class WishStore {
     this.likedWishIds.add(wish.id);
     this.saveWishes();
     this.saveLikedWishes();
+    return wish;
+  }
+
+  syncFromServer(remoteWishes) {
+    if (!Array.isArray(remoteWishes) || remoteWishes.length === 0) return false;
+
+    const mergedMap = new Map();
+    for (const item of remoteWishes) {
+      if (!item || !item.id) continue;
+      mergedMap.set(item.id, sanitizeWishItem({ ...item }));
+    }
+
+    // 로컬에만 있던 사용자 작성 소원이 있다면 유실되지 않도록 병합
+    for (const localWish of this.wishes) {
+      if (!localWish || !localWish.id) continue;
+      if (mergedMap.has(localWish.id)) {
+        const remoteItem = mergedMap.get(localWish.id);
+        remoteItem.hapjang = Math.max(
+          Number(remoteItem.hapjang) || 1,
+          Number(localWish.hapjang) || 1
+        );
+      } else if (!String(localWish.id).startsWith('cp-')) {
+        mergedMap.set(localWish.id, sanitizeWishItem({ ...localWish }));
+      }
+    }
+
+    this.wishes = [...mergedMap.values()];
+    this.saveWishes();
+    return true;
+  }
+
+  applyRemoteWishAdded(wish) {
+    if (!wish || typeof wish !== 'object' || !wish.id) return null;
+    if (this.getWishById(wish.id)) return null;
+
+    const cleaned = sanitizeWishItem({
+      ...wish,
+      hapjang: Math.max(1, Number(wish.hapjang) || 1)
+    });
+    this.wishes.push(cleaned);
+    this.saveWishes();
+    return cleaned;
+  }
+
+  applyRemoteHapjang(wishId, hapjangCount) {
+    const wish = this.getWishById(wishId);
+    if (!wish) return null;
+
+    const nextCount = Number(hapjangCount);
+    wish.hapjang = Number.isFinite(nextCount)
+      ? Math.max(wish.hapjang, nextCount)
+      : wish.hapjang + 1;
+    this.saveWishes();
     return wish;
   }
 }

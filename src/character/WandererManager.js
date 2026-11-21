@@ -9,7 +9,11 @@ import {
   WANDERER_SPOTS,
   FELLOW_WANDERERS_PRESETS
 } from '../config/constants.js';
-import { ANYANGRU_CONFIG } from '../config/worldConfig.js';
+import {
+  MURYANGSUJEON_CONFIG,
+  ANYANGRU_CONFIG,
+  ANYANGRU_CUSHIONS
+} from '../config/worldConfig.js';
 import {
   equipWandererActor,
   applyWiderWalkingStride,
@@ -20,7 +24,9 @@ import {
   getGroundHeightAt,
   clampWalkableXZ,
   buildWalkPath,
-  findNearestAnyangruCushion
+  findNearestAnyangruCushion,
+  getAnyangruCushionByIndex,
+  selectPriorityAnyangruCushion
 } from './Navigation.js';
 
 const C_ENGINE = window.SANSA_CORE;
@@ -44,6 +50,10 @@ export class WandererManager {
 
     this.selfActor = null;
     this.npcWanderers = [];
+    this.remotePlayers = new Map();
+    this.multiplayerClient = null;
+    this.occupiedSeatIndex = null;
+    this.seatRequestInFlight = false;
     this.revealedNpc = null;
     this.revealedNpcUntil = 0;
     this.activeBubbles = [];
@@ -58,6 +68,9 @@ export class WandererManager {
     this.journeyFinalSpotId = null;
     this.pendingMeditationOnArrival = false;
     this.targetCushion = null;
+    this.activeHallSeatIndex = null;
+    this.targetHallCushion = null;
+    this.pendingHallMeditationOnArrival = false;
 
     this.raycaster = new C_ENGINE.Raycaster();
     this.ndcPointer = new C_ENGINE.Vector2();
@@ -90,7 +103,7 @@ export class WandererManager {
         ) {
           return {
             name: parsed.name,
-            paletteIdx: Math.abs(parsed.paletteIdx) % WANDERER_PALETTES.length
+            paletteIdx: parsed.v2Palette ? Math.abs(parsed.paletteIdx) % WANDERER_PALETTES.length : 0
           };
         }
       }
@@ -99,10 +112,9 @@ export class WandererManager {
     }
 
     const randomIdx = Math.floor(Math.random() * WANDERER_POETIC_NAMES.length);
-    const randomPal = Math.floor(Math.random() * WANDERER_PALETTES.length);
     const initial = {
       name: WANDERER_POETIC_NAMES[randomIdx],
-      paletteIdx: randomPal
+      paletteIdx: 0 // 기본 연옥빛 풍류 도포(시안 1)
     };
     try {
       localStorage.setItem(STORAGE_KEYS.WANDERER_PROFILE, JSON.stringify(initial));
@@ -138,6 +150,255 @@ export class WandererManager {
 
   notifyPostureChanged() {
     this.callbacks.onPostureChange?.(this.isMeditatingOrHeading);
+  }
+
+  notifySeatStateChanged() {
+    this.callbacks.onSeatStateChange?.(this.getAllSeatsSnapshot());
+  }
+
+  setMultiplayerClient(client) {
+    this.multiplayerClient = client;
+  }
+
+  getInitialNetworkProfile() {
+    const pos = this.selfActor?.group?.position;
+    return {
+      name: this.profile.name,
+      paletteIdx: this.profile.paletteIdx,
+      x: pos ? pos.x : 0,
+      z: pos ? pos.z : 1.5,
+      yaw: this.selfActor?.group?.rotation?.y || 0,
+      posture: this.posture,
+      seatIndex: this.occupiedSeatIndex
+    };
+  }
+
+  applyAssignedProfile({ name }) {
+    if (!name || typeof name !== 'string') return;
+    this.profile.name = name;
+    if (this.selfLabel?.nameSpan) {
+      this.selfLabel.nameSpan.textContent = name;
+    }
+    this.notifySeatStateChanged();
+  }
+
+  publishImmediateSelfState() {
+    if (!this.multiplayerClient || !this.selfActor?.group) return;
+    const pos = this.selfActor.group.position;
+    this.multiplayerClient.publishSelfState(
+      {
+        name: this.profile.name,
+        paletteIdx: this.profile.paletteIdx,
+        x: pos.x,
+        z: pos.z,
+        yaw: this.selfActor.group.rotation.y,
+        posture: this.posture,
+        seatIndex: this.occupiedSeatIndex
+      },
+      true
+    );
+  }
+
+  releaseOccupiedSeat() {
+    if (this.occupiedSeatIndex === null) return;
+    this.occupiedSeatIndex = null;
+    this.multiplayerClient?.releaseSeat();
+    this.notifySeatStateChanged();
+  }
+
+  getSeatInfo(seatIndex) {
+    const seat = getAnyangruCushionByIndex(seatIndex);
+    if (!seat) return null;
+
+    if (this.occupiedSeatIndex === seatIndex) {
+      return {
+        seat,
+        status: 'mine',
+        occupantName: this.profile.name,
+        peerId: null,
+        isKneeling: this.posture === 'kneel'
+      };
+    }
+
+    for (const peer of this.remotePlayers.values()) {
+      if (peer.seatIndex === seatIndex) {
+        return {
+          seat,
+          status: 'occupied',
+          occupantName: peer.name || '산사 나그네',
+          peerId: peer.id,
+          isKneeling: peer.posture === 'kneel'
+        };
+      }
+    }
+
+    return {
+      seat,
+      status: 'empty',
+      occupantName: null,
+      peerId: null,
+      isKneeling: false
+    };
+  }
+
+  getAllSeatsSnapshot() {
+    return ANYANGRU_CUSHIONS.map((c) => this.getSeatInfo(c.index));
+  }
+
+  syncNpcVisibility() {
+    const showNpcs = this.remotePlayers.size === 0;
+    for (const npc of this.npcWanderers) {
+      if (npc.actor?.group) {
+        npc.actor.group.visible = showNpcs;
+      }
+      if (!showNpcs && npc.labelObj?.el) {
+        npc.labelObj.el.hidden = true;
+      }
+    }
+  }
+
+  upsertRemotePlayer(peer) {
+    if (!peer || !peer.id) return;
+
+    const paletteIdx = Math.abs(Number(peer.paletteIdx) || 0) % WANDERER_PALETTES.length;
+    const palette = WANDERER_PALETTES[paletteIdx];
+    const seatIdx = Number.isInteger(peer.seatIndex) ? peer.seatIndex : null;
+    const posture = peer.posture === 'kneel' ? 'kneel' : 'walk';
+    const seatCushion = seatIdx !== null ? getAnyangruCushionByIndex(seatIdx) : null;
+
+    let targetX = Number.isFinite(peer.x) ? Number(peer.x) : 0;
+    let targetZ = Number.isFinite(peer.z) ? Number(peer.z) : 1.5;
+    let targetY = getGroundHeightAt(targetX, targetZ);
+    let targetYaw = Number.isFinite(peer.yaw) ? Number(peer.yaw) : 0;
+
+    if (posture === 'kneel' && seatCushion) {
+      targetX = seatCushion.x;
+      targetY = ANYANGRU_CONFIG.cushionWorldY;
+      targetZ = seatCushion.z;
+      targetYaw = 0;
+    }
+
+    if (!this.remotePlayers.has(peer.id)) {
+      const actor = C_ENGINE.createMonk({ detail: 'reduced', remote: true });
+      actor.group.name = `RemoteWanderer_${peer.id}`;
+      actor.group.position.set(targetX, targetY, targetZ);
+      actor.group.rotation.y = targetYaw;
+      this.rootGroup.add(actor.group);
+
+      const labelObj = this.createVisitorLabelElement(peer.name || '산사 나그네', false);
+
+      const entry = {
+        id: peer.id,
+        name: peer.name || '산사 나그네',
+        paletteIdx,
+        palette,
+        actor,
+        labelObj,
+        posture,
+        seatIndex: seatIdx,
+        targetPos: new C_ENGINE.Vector3(targetX, targetY, targetZ),
+        targetYaw,
+        animSeed: Math.random() * 8.0,
+        equipped: false
+      };
+
+      this.remotePlayers.set(peer.id, entry);
+
+      actor.ready?.then(() => {
+        if (!this.remotePlayers.has(peer.id)) return;
+        equipWandererActor(actor, entry.palette, false, entry.posture);
+        entry.equipped = true;
+      });
+
+      this.syncNpcVisibility();
+      this.notifySeatStateChanged();
+      return;
+    }
+
+    const entry = this.remotePlayers.get(peer.id);
+    const prevSeat = entry.seatIndex;
+    const prevPosture = entry.posture;
+
+    if (peer.name && peer.name !== entry.name) {
+      entry.name = peer.name;
+      if (entry.labelObj?.nameSpan) {
+        entry.labelObj.nameSpan.textContent = peer.name;
+      }
+    }
+
+    if (paletteIdx !== entry.paletteIdx) {
+      entry.paletteIdx = paletteIdx;
+      entry.palette = palette;
+      if (entry.equipped) {
+        applyWandererPalette(entry.actor, palette);
+      }
+    }
+
+    entry.seatIndex = seatIdx;
+    entry.targetPos.set(targetX, targetY, targetZ);
+    entry.targetYaw = targetYaw;
+
+    if (posture !== entry.posture) {
+      entry.posture = posture;
+      entry.actor.setMode(posture);
+      if (posture === 'kneel' && seatCushion) {
+        entry.actor.group.position.set(seatCushion.x, ANYANGRU_CONFIG.cushionWorldY, seatCushion.z);
+        entry.actor.group.rotation.y = 0;
+      }
+    }
+
+    if (prevSeat !== entry.seatIndex || prevPosture !== entry.posture) {
+      this.notifySeatStateChanged();
+    }
+  }
+
+  removeRemotePlayer(peerId) {
+    const entry = this.remotePlayers.get(peerId);
+    if (!entry) return;
+
+    for (let i = this.activeBubbles.length - 1; i >= 0; i--) {
+      const b = this.activeBubbles[i];
+      if (b.parent === entry.actor?.group) {
+        b.parent.remove(b.sprite);
+        b.sprite.material.map?.dispose();
+        b.sprite.material.dispose();
+        this.activeBubbles.splice(i, 1);
+      }
+    }
+
+    if (entry.actor?.group) {
+      this.rootGroup.remove(entry.actor.group);
+    }
+    entry.actor?.destroy?.();
+    entry.labelObj?.el?.remove();
+
+    if (this.revealedNpc === entry) {
+      this.revealedNpc = null;
+    }
+
+    this.remotePlayers.delete(peerId);
+    this.syncNpcVisibility();
+    this.notifySeatStateChanged();
+  }
+
+  handleRemoteAction(peerId, actionType) {
+    if (actionType !== 'greet') return;
+    const entry = this.remotePlayers.get(peerId);
+    if (!entry || !entry.actor?.group) return;
+
+    const now = this.lastElapsed || 0;
+    if (entry.posture === 'kneel') {
+      entry.actor.bow(now);
+    } else {
+      entry.actor.greet(now);
+    }
+
+    this.spawnBubbleAbove(entry.actor.group, '🙏 평안하신지요', 2.6);
+    this.spawnGroundRipple(
+      entry.actor.group.position,
+      entry.palette?.markerHex || 0x98f5c4
+    );
+    this.revealNpcLabel(entry, 3200);
   }
 
   createDestinationMarker() {
@@ -245,8 +506,8 @@ export class WandererManager {
       equipWandererActor(selfActor, this.currentPalette, true);
     });
 
-    // 2. 동료 산사 나그네 NPC 스폰 (모바일 발열 최적화: 모바일 1명, 데스크톱 2명)
-    const maxNpcs = this.sceneManager.isMobile ? 1 : 2;
+    // 2. 동료 산사 나그네 NPC 스폰 (PC·모바일 동일 2명)
+    const maxNpcs = 2;
     const presets = FELLOW_WANDERERS_PRESETS.buseoksa.slice(0, maxNpcs);
     presets.forEach((preset, idx) => {
       const spot = spots[preset.spotIdx % spots.length] || spots[0];
@@ -255,7 +516,7 @@ export class WandererManager {
       const clamped = clampWalkableXZ(homeX, homeZ);
       const homeY = getGroundHeightAt(clamped.x, clamped.z);
 
-      const npcActor = C_ENGINE.createMonk();
+      const npcActor = C_ENGINE.createMonk({ detail: 'reduced', remote: true });
       npcActor.group.position.set(clamped.x, homeY, clamped.z);
       npcActor.group.rotation.y = spot.facingYaw || 0;
       this.rootGroup.add(npcActor.group);
@@ -263,6 +524,13 @@ export class WandererManager {
       const palette = WANDERER_PALETTES[preset.paletteIdx % WANDERER_PALETTES.length];
       npcActor.ready.then(() => {
         equipWandererActor(npcActor, palette, false);
+        // 고폴리곤(19.4만 삼각형) NPC의 실시간 그림자 패스 비활성화로 GPU 부하 대폭 절감
+        npcActor.group.traverse((obj) => {
+          if (obj.isMesh) {
+            obj.castShadow = false;
+            obj.receiveShadow = false;
+          }
+        });
       });
 
       let npcName = preset.name;
@@ -288,6 +556,25 @@ export class WandererManager {
     this.notifyPostureChanged();
   }
 
+  createVisitorLabelElement(nameText, isSelf) {
+    if (!this.visitorLabelContainer) return null;
+    const el = document.createElement('div');
+    el.className = isSelf ? 'visitor-label is-self' : 'visitor-label';
+    el.hidden = !isSelf;
+    if (isSelf) {
+      const meBadge = document.createElement('span');
+      meBadge.className = 'visitor-label-me';
+      meBadge.textContent = '나';
+      el.appendChild(meBadge);
+    }
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'visitor-label-name';
+    nameSpan.textContent = nameText;
+    el.appendChild(nameSpan);
+    this.visitorLabelContainer.appendChild(el);
+    return { el, nameSpan };
+  }
+
   initVisitorLabels() {
     let container = document.getElementById('visitor-labels');
     if (!container) {
@@ -301,27 +588,12 @@ export class WandererManager {
     this.visitorLabelContainer = container;
     this.labelProjVec = new C_ENGINE.Vector3();
 
-    const makeLabelEl = (nameText, isSelf) => {
-      const el = document.createElement('div');
-      el.className = isSelf ? 'visitor-label is-self' : 'visitor-label';
-      el.hidden = !isSelf;
-      if (isSelf) {
-        const meBadge = document.createElement('span');
-        meBadge.className = 'visitor-label-me';
-        meBadge.textContent = '나';
-        el.appendChild(meBadge);
-      }
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'visitor-label-name';
-      nameSpan.textContent = nameText;
-      el.appendChild(nameSpan);
-      container.appendChild(el);
-      return { el, nameSpan };
-    };
-
-    this.selfLabel = makeLabelEl(this.profile.name, true);
+    this.selfLabel = this.createVisitorLabelElement(this.profile.name, true);
     this.npcWanderers.forEach((npc) => {
-      npc.labelObj = makeLabelEl(npc.name, false);
+      npc.labelObj = this.createVisitorLabelElement(npc.name, false);
+    });
+    this.remotePlayers.forEach((peer) => {
+      peer.labelObj = this.createVisitorLabelElement(peer.name, false);
     });
   }
 
@@ -334,9 +606,8 @@ export class WandererManager {
 
   updateVisitorLabels() {
     if (!this.visitorLabelContainer || !this.camera) return;
-    const rect = this.visitorLabelContainer.getBoundingClientRect();
-    const vw = rect.width || window.innerWidth;
-    const vh = rect.height || window.innerHeight;
+    const vw = this.sceneManager.width || window.innerWidth;
+    const vh = this.sceneManager.height || window.innerHeight;
     if (vw <= 0 || vh <= 0) return;
 
     const now = performance.now();
@@ -344,7 +615,7 @@ export class WandererManager {
       this.revealedNpc = null;
     }
 
-    const projectActorHatTop = (actor, labelObj, isSelf, opacity = 1.0) => {
+    const projectActorHatTop = (actor, labelObj, isSelf, opacity = 1.0, isKneeling = false) => {
       if (!actor || !actor.group || !labelObj || !actor.group.visible) {
         if (labelObj?.el) labelObj.el.hidden = true;
         return;
@@ -365,11 +636,11 @@ export class WandererManager {
         pt.y += 0.64;
       } else {
         actor.group.getWorldPosition(pt);
-        pt.y += this.posture === 'kneel' && isSelf ? 1.44 : 1.88;
+        pt.y += isKneeling ? 1.44 : 1.88;
       }
 
       const dist = this.camera.position.distanceTo(pt);
-      if (!isSelf && dist > 48) {
+      if (!isSelf && dist > 54) {
         labelObj.el.hidden = true;
         return;
       }
@@ -401,7 +672,7 @@ export class WandererManager {
       if (this.selfLabel.nameSpan.textContent !== this.profile.name) {
         this.selfLabel.nameSpan.textContent = this.profile.name;
       }
-      projectActorHatTop(this.selfActor, this.selfLabel, true, 1.0);
+      projectActorHatTop(this.selfActor, this.selfLabel, true, 1.0, this.posture === 'kneel');
     }
 
     this.npcWanderers.forEach((npc) => {
@@ -409,16 +680,36 @@ export class WandererManager {
       if (this.revealedNpc === npc && now < this.revealedNpcUntil) {
         const remaining = this.revealedNpcUntil - now;
         const fadeOpacity = remaining < 450 ? Math.max(0, remaining / 450) : 0.96;
-        projectActorHatTop(npc.actor, npc.labelObj, false, fadeOpacity);
+        projectActorHatTop(npc.actor, npc.labelObj, false, fadeOpacity, false);
       } else {
         npc.labelObj.el.hidden = true;
+      }
+    });
+
+    this.remotePlayers.forEach((peer) => {
+      if (!peer.labelObj) return;
+      if (this.revealedNpc === peer && now < this.revealedNpcUntil) {
+        const remaining = this.revealedNpcUntil - now;
+        const fadeOpacity = remaining < 450 ? Math.max(0, remaining / 450) : 0.96;
+        projectActorHatTop(
+          peer.actor,
+          peer.labelObj,
+          false,
+          fadeOpacity,
+          peer.posture === 'kneel'
+        );
+      } else {
+        peer.labelObj.el.hidden = true;
       }
     });
   }
 
   pickNpcWandererAtClient(clientX, clientY) {
     const canvas = this.sceneManager.renderer?.domElement;
-    if (!canvas || !this.npcWanderers.length) return null;
+    if (!canvas) return null;
+
+    const candidates = [...this.remotePlayers.values(), ...this.npcWanderers];
+    if (candidates.length === 0) return null;
 
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
@@ -431,25 +722,18 @@ export class WandererManager {
     let bestNpc = null;
     let bestDist = Infinity;
 
-    for (const npc of this.npcWanderers) {
+    for (const npc of candidates) {
       const grp = npc.actor?.group;
       if (!grp || !grp.visible) continue;
 
-      const meshHits = this.raycaster.intersectObject(grp, true);
-      if (meshHits.length > 0 && meshHits[0].distance < bestDist) {
-        bestDist = meshHits[0].distance;
-        bestNpc = npc;
-        continue;
-      }
-
       const basePos = grp.position;
       const toCamDist = this.camera.position.distanceTo(basePos);
-      if (toCamDist > 52) continue;
+      if (toCamDist > 56) continue;
 
       for (const sampleH of [0.45, 0.95, 1.42]) {
         const center = new C_ENGINE.Vector3(basePos.x, basePos.y + sampleH, basePos.z);
         const distSq = ray.distanceSqToPoint(center);
-        const hitRadius = sampleH > 1.25 ? 0.52 : 0.44;
+        const hitRadius = sampleH > 1.25 ? 0.56 : 0.48;
         if (distSq <= hitRadius * hitRadius && toCamDist < bestDist) {
           bestDist = toCamDist;
           bestNpc = npc;
@@ -472,7 +756,24 @@ export class WandererManager {
   startJourneyToPoint(targetVec, spotId = null, toastMessage = null, meditateOnArrival = false) {
     if (!this.selfActor) return;
 
-    this.waypoints = buildWalkPath(this.selfActor.group.position, targetVec);
+    if (!meditateOnArrival) {
+      this.pendingHallMeditationOnArrival = false;
+      this.targetHallCushion = null;
+      this.activeHallSeatIndex = null;
+      if (this.occupiedSeatIndex !== null) {
+        this.targetCushion = null;
+        this.releaseOccupiedSeat();
+        this.publishImmediateSelfState();
+      }
+    }
+
+    const allowedSeatKey =
+      this.pendingHallMeditationOnArrival && this.targetHallCushion
+        ? `hall:${this.targetHallCushion.index}`
+        : meditateOnArrival && this.targetCushion
+          ? this.targetCushion.index
+          : null;
+    this.waypoints = buildWalkPath(this.selfActor.group.position, targetVec, allowedSeatKey);
     this.journeyFinalSpotId = spotId;
     this.pendingMeditationOnArrival = meditateOnArrival;
     this.cameraController.returnToFollow();
@@ -481,6 +782,7 @@ export class WandererManager {
       this.posture = 'walk';
       this.selfActor.setMode('walk');
       this.callbacks.onBreathingToggle?.(false);
+      this.publishImmediateSelfState();
     }
     this.notifyPostureChanged();
 
@@ -521,35 +823,37 @@ export class WandererManager {
     this.ndcPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.ndcPointer, this.camera);
 
-    const activeEnvGroup = this.sceneManager.buseoksaGroup;
+    // 초고속 해석적(Analytical) 다층 지면 평면 교차 검사 (수백만 삼각형 CPU 레이캐스팅 완전 제거)
+    const ray = this.raycaster.ray;
     let hitPoint = null;
-
-    if (activeEnvGroup) {
-      const envHits = this.raycaster.intersectObject(activeEnvGroup, true);
-      for (const hit of envHits) {
-        if (hit.distance > 85) continue;
-        if (hit.point.y <= 5.2 && hit.point.y >= -2.2) {
-          if (hit.face) {
-            const worldNormal = hit.face.normal
-              .clone()
-              .transformDirection(hit.object.matrixWorld);
-            if (worldNormal.y < 0.45) continue;
-          }
-          hitPoint = hit.point.clone();
-          break;
+    if (Math.abs(ray.direction.y) > 0.001) {
+      let bestT = Infinity;
+      const testPlane = (planeY, boundsCheck) => {
+        const t = (planeY - ray.origin.y) / ray.direction.y;
+        if (t <= 0.1 || t >= 95 || t >= bestT) return;
+        const hx = ray.origin.x + ray.direction.x * t;
+        const hz = ray.origin.z + ray.direction.z * t;
+        if (!boundsCheck || boundsCheck(hx, hz)) {
+          bestT = t;
+          hitPoint = new C_ENGINE.Vector3(hx, planeY, hz);
         }
-      }
-    }
+      };
 
-    if (!hitPoint && this.selfActor) {
-      const refY = this.selfActor.group.position.y;
-      const ray = this.raycaster.ray;
-      if (Math.abs(ray.direction.y) > 0.001) {
-        const t = (refY - ray.origin.y) / ray.direction.y;
-        if (t > 0 && t < 90) {
-          hitPoint = ray.origin.clone().addScaledVector(ray.direction, t);
-        }
-      }
+      // 1) 차경루 누각 마루 (y = 0.86)
+      testPlane(ANYANGRU_CONFIG.deckY, (x, z) =>
+        Math.abs(x) <= ANYANGRU_CONFIG.deckHalfW && z >= -23.5 && z <= -15.2
+      );
+      // 2) 청풍사 본전 기단·실내 마루 (y = 0.20)
+      testPlane(MURYANGSUJEON_CONFIG.verandaY, (x, z) =>
+        x >= MURYANGSUJEON_CONFIG.stylobateMinX &&
+        x <= MURYANGSUJEON_CONFIG.stylobateMaxX &&
+        z >= MURYANGSUJEON_CONFIG.stylobateMinZ &&
+        z <= MURYANGSUJEON_CONFIG.stylobateMaxZ
+      );
+      // 3) 동쪽 연화지 청풍교 아치 (y ≈ 0.05)
+      testPlane(0.05, (x, z) => x >= 20.1 && x <= 36.9 && z >= -5.75 && z <= -3.25);
+      // 4) 기본 마당·정원 지면 (y = -0.78)
+      testPlane(-0.78, null);
     }
 
     if (!hitPoint) return;
@@ -572,14 +876,29 @@ export class WandererManager {
   cancelPointJourney() {
     this.waypoints = [];
     this.pendingMeditationOnArrival = false;
+    this.targetCushion = null;
+    this.activeHallSeatIndex = null;
+    this.targetHallCushion = null;
+    this.pendingHallMeditationOnArrival = false;
     this.destinationMarker.visible = false;
     this.cameraController.returnToFollow();
     document.body.classList.remove('wanderer-walking');
+
+    let changed = false;
+    if (this.occupiedSeatIndex !== null) {
+      this.releaseOccupiedSeat();
+      changed = true;
+    }
 
     if (this.posture !== 'walk' && this.selfActor) {
       this.posture = 'walk';
       this.selfActor.setMode('walk');
       this.callbacks.onBreathingToggle?.(false);
+      changed = true;
+    }
+
+    if (changed) {
+      this.publishImmediateSelfState();
     }
     this.notifyPostureChanged();
   }
@@ -587,6 +906,12 @@ export class WandererManager {
   triggerGreeting() {
     if (!this.selfActor) return;
     const now = this.lastElapsed || 0;
+
+    if (this.posture !== 'kneel' && this.occupiedSeatIndex !== null) {
+      this.targetCushion = null;
+      this.releaseOccupiedSeat();
+      this.publishImmediateSelfState();
+    }
 
     this.waypoints = [];
     this.pendingMeditationOnArrival = false;
@@ -612,15 +937,21 @@ export class WandererManager {
       this.currentPalette.markerHex || 0xffd27d
     );
 
-    this.npcWanderers.forEach((npc, idx) => {
-      setTimeout(() => {
-        if (!npc.actor) return;
-        npc.actor.greet((this.lastElapsed || 0) + 0.35);
-        const replies = ['🙏 성불하십시오', '🎋 좋은 바람입니다', '🍵 평안한 산책 되소서'];
-        this.spawnBubbleAbove(npc.actor.group, replies[idx % replies.length], 2.5);
-        this.spawnGroundRipple(npc.actor.group.position, 0x98f5c4);
-      }, 360 + idx * 280);
+    this.multiplayerClient?.sendAction('greet', {
+      posture: this.posture
     });
+
+    if (this.remotePlayers.size === 0) {
+      this.npcWanderers.forEach((npc, idx) => {
+        setTimeout(() => {
+          if (!npc.actor || !npc.actor.group?.visible) return;
+          npc.actor.greet((this.lastElapsed || 0) + 0.35);
+          const replies = ['🙏 성불하십시오', '🎋 좋은 바람입니다', '🍵 평안한 산책 되소서'];
+          this.spawnBubbleAbove(npc.actor.group, replies[idx % replies.length], 2.5);
+          this.spawnGroundRipple(npc.actor.group.position, 0x98f5c4);
+        }, 360 + idx * 280);
+      });
+    }
 
     this.callbacks.onToast?.(
       `🙏 '${this.profile.name}'님이 걸음을 멈추고 두 손을 모아 합장 인사를 건넵니다.`
@@ -635,9 +966,11 @@ export class WandererManager {
     this.posture = 'kneel';
 
     const selfPos = this.selfActor.group.position;
-    const { cushion } = findNearestAnyangruCushion(selfPos.x, selfPos.z, { frontRowOnly: true });
-    const targetCushion = this.targetCushion || cushion;
+    const assignedCushion = getAnyangruCushionByIndex(this.occupiedSeatIndex);
+    const fallbackCushion = findNearestAnyangruCushion(selfPos.x, selfPos.z).cushion;
+    const targetCushion = this.targetCushion || assignedCushion || fallbackCushion;
     this.targetCushion = null;
+    this.occupiedSeatIndex = targetCushion.index;
 
     this.selfActor.group.position.set(
       targetCushion.x,
@@ -647,40 +980,144 @@ export class WandererManager {
     this.selfActor.group.rotation.y = 0.0;
     this.cameraController.setFollowOrientation(0.0, 0.04, false);
     this.selfActor.setMode('kneel');
-    this.spawnBubbleAbove(this.selfActor.group, '🍵 운해 능선을 바라보며 명상합니다', 2.8);
+    this.spawnGroundRipple(
+      this.selfActor.group.position,
+      this.currentPalette.markerHex || 0xffd27d
+    );
+    this.callbacks.onBreathingToggle?.(true);
+    this.notifySeatStateChanged();
+    this.notifyPostureChanged();
+    this.publishImmediateSelfState();
+  }
+
+  standUpFromMeditation() {
+    if (!this.selfActor) return;
+    this.pendingMeditationOnArrival = false;
+    this.targetCushion = null;
+    this.activeHallSeatIndex = null;
+    this.targetHallCushion = null;
+    this.pendingHallMeditationOnArrival = false;
+    this.waypoints = [];
+    this.destinationMarker.visible = false;
+    this.releaseOccupiedSeat();
+
+    if (this.posture !== 'walk') {
+      this.posture = 'walk';
+      this.selfActor.setMode('walk');
+      this.callbacks.onBreathingToggle?.(false);
+    }
+
+    this.notifyPostureChanged();
+    this.publishImmediateSelfState();
+  }
+
+  getIndoorSeatInfo(hallSeatIndex) {
+    const isMine =
+      (this.posture === 'kneel' && this.activeHallSeatIndex === hallSeatIndex) ||
+      (this.pendingHallMeditationOnArrival && this.targetHallCushion?.index === hallSeatIndex);
+    return { status: isMine ? 'mine' : 'empty' };
+  }
+
+  enterHallMeditation() {
+    if (!this.selfActor || !this.targetHallCushion) return;
+    const cushion = this.targetHallCushion;
+    this.pendingHallMeditationOnArrival = false;
+    this.pendingMeditationOnArrival = false;
+    this.waypoints = [];
+    this.destinationMarker.visible = false;
+    this.posture = 'kneel';
+    this.activeHallSeatIndex = cushion.index;
+
+    const sitY = MURYANGSUJEON_CONFIG.interior.floorY + 0.08;
+    this.selfActor.group.position.set(cushion.x, sitY, cushion.z);
+    this.selfActor.group.rotation.y = cushion.yaw;
+    this.cameraController.setFollowOrientation(cushion.yaw, 0.06, false);
+    this.selfActor.setMode('kneel');
     this.spawnGroundRipple(
       this.selfActor.group.position,
       this.currentPalette.markerHex || 0xffd27d
     );
     this.callbacks.onBreathingToggle?.(true);
     this.notifyPostureChanged();
-    this.callbacks.onToast?.(
-      '🍵 차경루 앞줄 명상 방석에 앉아 운해 차경을 바라보며 호흡 명상에 듭니다.'
-    );
+    this.publishImmediateSelfState();
   }
 
-  togglePosture() {
-    if (!this.selfActor) return;
+  sitAtHallCushion(hallSeatIndex) {
+    if (!this.selfActor) return false;
+    const cushions = MURYANGSUJEON_CONFIG.interior?.cushions || [];
+    const cushion = cushions.find((c) => c.index === hallSeatIndex);
+    if (!cushion) return false;
 
-    if (this.posture === 'kneel' || this.pendingMeditationOnArrival) {
-      this.pendingMeditationOnArrival = false;
-      this.targetCushion = null;
-      this.waypoints = [];
-      this.destinationMarker.visible = false;
-      this.posture = 'walk';
-      this.selfActor.setMode('walk');
-      this.callbacks.onBreathingToggle?.(false);
-      this.notifyPostureChanged();
-      this.callbacks.onToast?.('🎋 명상을 마치고 자리에서 일어나 산사 산책을 이어갑니다.');
-      return;
+    if (
+      (this.posture === 'kneel' && this.activeHallSeatIndex === hallSeatIndex) ||
+      (this.pendingHallMeditationOnArrival && this.targetHallCushion?.index === hallSeatIndex)
+    ) {
+      this.standUpFromMeditation();
+      return true;
     }
 
-    const selfPos = this.selfActor.group.position;
-    const { cushion, dist } = findNearestAnyangruCushion(selfPos.x, selfPos.z, {
-      frontRowOnly: true
-    });
-    this.targetCushion = cushion;
+    if (this.occupiedSeatIndex !== null) {
+      this.targetCushion = null;
+      this.releaseOccupiedSeat();
+    }
 
+    this.targetHallCushion = cushion;
+    this.pendingHallMeditationOnArrival = true;
+    this.activeHallSeatIndex = cushion.index;
+
+    const selfPos = this.selfActor.group.position;
+    const dist = Math.hypot(selfPos.x - cushion.x, selfPos.z - cushion.z);
+    if (dist <= 0.48) {
+      this.enterHallMeditation();
+    } else {
+      const targetVec = new C_ENGINE.Vector3(
+        cushion.x,
+        MURYANGSUJEON_CONFIG.interior.floorY + 0.08,
+        cushion.z
+      );
+      this.startJourneyToPoint(targetVec, null, null, true);
+    }
+    return true;
+  }
+
+  async sitAtAutoSeat() {
+    if (!this.selfActor || this.seatRequestInFlight) return false;
+    this.seatRequestInFlight = true;
+
+    const selfPos = this.selfActor.group.position;
+    let res;
+    try {
+      if (this.multiplayerClient) {
+        res = await this.multiplayerClient.requestSeat({
+          mode: 'auto',
+          x: selfPos.x,
+          z: selfPos.z
+        });
+      } else {
+        const { cushion } = selectPriorityAnyangruCushion(selfPos.x, selfPos.z, new Set());
+        res = cushion ? { ok: true, seatIndex: cushion.index } : { ok: false, reason: 'full' };
+      }
+    } finally {
+      this.seatRequestInFlight = false;
+    }
+
+    if (!res?.ok) {
+      return false;
+    }
+
+    const cushion = getAnyangruCushionByIndex(res.seatIndex);
+    if (!cushion) return false;
+
+    if (this.posture === 'kneel' && this.occupiedSeatIndex === cushion.index) {
+      return true;
+    }
+
+    this.occupiedSeatIndex = cushion.index;
+    this.targetCushion = cushion;
+    this.notifySeatStateChanged();
+    this.publishImmediateSelfState();
+
+    const dist = Math.hypot(selfPos.x - cushion.x, selfPos.z - cushion.z);
     if (dist <= 0.48) {
       this.enterAnyangruMeditation();
     } else {
@@ -689,13 +1126,123 @@ export class WandererManager {
         ANYANGRU_CONFIG.cushionWorldY,
         cushion.z
       );
-      this.startJourneyToPoint(
-        cushionTarget,
-        'anyangnu_cushion',
-        '🍵 차경루 누각 앞줄 방석으로 올라가 명상을 시작합니다.',
-        true
-      );
+      this.startJourneyToPoint(cushionTarget, 'anyangnu_cushion', null, true);
     }
+
+    return true;
+  }
+
+  async sitAtSpecificSeat(seatIndex) {
+    const cushion = getAnyangruCushionByIndex(seatIndex);
+    if (!cushion || !this.selfActor) return false;
+
+    // 이미 내가 앉아 있거나 이동 중인 방석을 다시 누르면 자리에서 일어섬
+    if (this.occupiedSeatIndex === seatIndex && this.isMeditatingOrHeading) {
+      this.standUpFromMeditation();
+      return true;
+    }
+
+    const seatInfo = this.getSeatInfo(seatIndex);
+    if (seatInfo?.status === 'occupied') {
+      if (seatInfo.peerId && this.remotePlayers.has(seatInfo.peerId)) {
+        this.revealNpcLabel(this.remotePlayers.get(seatInfo.peerId), 3200);
+      }
+      this.callbacks.onToast?.(
+        `🙏 이미 '${seatInfo.occupantName}'님이 명상 중인 자리입니다. 다른 방석을 선택해 주세요.`
+      );
+      return false;
+    }
+
+    if (this.seatRequestInFlight) return false;
+    this.seatRequestInFlight = true;
+
+    const selfPos = this.selfActor.group.position;
+    let res;
+    try {
+      if (this.multiplayerClient) {
+        res = await this.multiplayerClient.requestSeat({
+          mode: 'manual',
+          seatIndex,
+          x: selfPos.x,
+          z: selfPos.z
+        });
+      } else {
+        res = { ok: true, seatIndex };
+      }
+    } finally {
+      this.seatRequestInFlight = false;
+    }
+
+    if (!res?.ok) {
+      if (res?.reason === 'occupied') {
+        this.callbacks.onToast?.(
+          `🙏 방금 '${res.occupantName || '다른 나그네'}'님이 먼저 앉은 자리입니다. 다른 방석을 선택해 주세요.`
+        );
+      } else {
+        this.callbacks.onToast?.('🙏 선택한 방석에 앉을 수 없습니다.');
+      }
+      this.notifySeatStateChanged();
+      return false;
+    }
+
+    this.occupiedSeatIndex = cushion.index;
+    this.targetCushion = cushion;
+    this.notifySeatStateChanged();
+    this.publishImmediateSelfState();
+
+    const dist = Math.hypot(selfPos.x - cushion.x, selfPos.z - cushion.z);
+    if (dist <= 0.48) {
+      this.enterAnyangruMeditation();
+    } else {
+      const cushionTarget = new C_ENGINE.Vector3(
+        cushion.x,
+        ANYANGRU_CONFIG.cushionWorldY,
+        cushion.z
+      );
+      this.startJourneyToPoint(cushionTarget, 'anyangnu_cushion', null, true);
+    }
+
+    return true;
+  }
+
+  togglePosture() {
+    if (!this.selfActor) return;
+
+    if (
+      this.posture === 'kneel' ||
+      this.pendingMeditationOnArrival ||
+      this.pendingHallMeditationOnArrival
+    ) {
+      this.standUpFromMeditation();
+      return;
+    }
+
+    // 캐릭터가 청풍사 실내에 있을 때는 가장 가까운 실내 방석에 앉아 명상하기
+    const selfPos = this.selfActor.group.position;
+    const hallInt = MURYANGSUJEON_CONFIG.interior;
+    if (
+      hallInt &&
+      selfPos.x >= hallInt.minX - 0.5 &&
+      selfPos.x <= hallInt.maxX + 0.5 &&
+      selfPos.z >= hallInt.thresholdStartZ &&
+      selfPos.z <= hallInt.maxZ + 0.5 &&
+      Array.isArray(hallInt.cushions) &&
+      hallInt.cushions.length > 0
+    ) {
+      let nearest = hallInt.cushions[0];
+      let bestDist = Infinity;
+      for (const c of hallInt.cushions) {
+        const d = Math.hypot(selfPos.x - c.x, selfPos.z - c.z);
+        if (d < bestDist) {
+          bestDist = d;
+          nearest = c;
+        }
+      }
+      this.sitAtHallCushion(nearest.index);
+      return;
+    }
+
+    this.sitAtAutoSeat();
   }
 
   cyclePalette() {
@@ -707,6 +1254,7 @@ export class WandererManager {
       this.spawnGroundRipple(this.selfActor.group.position, this.currentPalette.markerHex);
     }
 
+    this.publishImmediateSelfState();
     this.callbacks.onToast?.(`🎋 '${this.currentPalette.fullName}' 차림으로 갈아입었습니다.`);
   }
 
@@ -782,6 +1330,10 @@ export class WandererManager {
         if (this.waypoints.length === 0) {
           this.destinationMarker.visible = false;
           this.spawnGroundRipple(selfPos, this.currentPalette.markerHex || 0xffd27d);
+          if (this.pendingHallMeditationOnArrival) {
+            this.enterHallMeditation();
+            return;
+          }
           if (this.pendingMeditationOnArrival) {
             this.enterAnyangruMeditation();
             return;
@@ -809,7 +1361,13 @@ export class WandererManager {
       const prevZ = selfPos.z;
       const nextX = prevX + this.velocity.x * dt;
       const nextZ = prevZ + this.velocity.z * dt;
-      const clamped = clampWalkableXZ(nextX, nextZ, prevX, prevZ);
+      const moveAllowedSeat =
+        this.pendingHallMeditationOnArrival && this.targetHallCushion
+          ? `hall:${this.targetHallCushion.index}`
+          : this.pendingMeditationOnArrival && this.targetCushion
+            ? this.targetCushion.index
+            : null;
+      const clamped = clampWalkableXZ(nextX, nextZ, prevX, prevZ, moveAllowedSeat);
       selfPos.x = clamped.x;
       selfPos.z = clamped.z;
 
@@ -862,49 +1420,117 @@ export class WandererManager {
       }
     }
 
-    // 4. 동료 나그네 NPC 패트롤 업데이트
-    this.npcWanderers.forEach((npc) => {
-      if (!npc.actor || !npc.actor.group) return;
-      const nPos = npc.actor.group.position;
+    // 4. 동료 나그네 NPC 패트롤 업데이트 (원격 접속자가 없을 때만 활성화)
+    if (this.remotePlayers.size === 0) {
+      this.npcWanderers.forEach((npc) => {
+        if (!npc.actor || !npc.actor.group || !npc.actor.group.visible) return;
+        const nPos = npc.actor.group.position;
 
-      if (elapsed > npc.nextMoveTime) {
-        const angle = Math.random() * Math.PI * 2;
-        const r = Math.random() * npc.patrolRadius;
-        const tx = npc.homePos.x + Math.cos(angle) * r;
-        const tz = npc.homePos.z + Math.sin(angle) * r;
-        const clamped = clampWalkableXZ(tx, tz);
-        npc.targetPos.set(clamped.x, getGroundHeightAt(clamped.x, clamped.z), clamped.z);
-        npc.nextMoveTime = elapsed + 6.0 + Math.random() * 6.5;
+        if (elapsed > npc.nextMoveTime) {
+          const angle = Math.random() * Math.PI * 2;
+          const r = Math.random() * npc.patrolRadius;
+          const tx = npc.homePos.x + Math.cos(angle) * r;
+          const tz = npc.homePos.z + Math.sin(angle) * r;
+          const clamped = clampWalkableXZ(tx, tz);
+          npc.targetPos.set(clamped.x, getGroundHeightAt(clamped.x, clamped.z), clamped.z);
+          npc.nextMoveTime = elapsed + 6.0 + Math.random() * 6.5;
+        }
+
+        const dx = npc.targetPos.x - nPos.x;
+        const dz = npc.targetPos.z - nPos.z;
+        const dist = Math.hypot(dx, dz);
+
+        let npcNormSpeed = 0;
+        if (dist > 0.12) {
+          const step = Math.min(dist, npc.speed * dt);
+          const nextNpcX = nPos.x + (dx / dist) * step;
+          const nextNpcZ = nPos.z + (dz / dist) * step;
+          const clampedNpc = clampWalkableXZ(nextNpcX, nextNpcZ, nPos.x, nPos.z);
+          nPos.x = clampedNpc.x;
+          nPos.z = clampedNpc.z;
+          nPos.y = getGroundHeightAt(nPos.x, nPos.z);
+
+          const targetYaw = Math.atan2(-dx, -dz);
+          const diff = Math.atan2(
+            Math.sin(targetYaw - npc.actor.group.rotation.y),
+            Math.cos(targetYaw - npc.actor.group.rotation.y)
+          );
+          npc.actor.group.rotation.y += diff * (1 - Math.exp(-dt * 8));
+          npcNormSpeed = 0.68;
+        }
+
+        npc.actor.update(elapsed + npc.seed, dt, npcNormSpeed);
+        if (npcNormSpeed > 0.02) {
+          applyWiderWalkingStride(npc.actor, npcNormSpeed);
+        }
+      });
+    }
+
+    // 4-1. 같은 산방에 접속한 원격 나그네(최대 20명) 60fps 보간 업데이트
+    if (this.remotePlayers.size > 0) {
+      const posBlend = 1 - Math.exp(-dt * 11);
+      const rotBlend = 1 - Math.exp(-dt * 12);
+
+      for (const peer of this.remotePlayers.values()) {
+        const grp = peer.actor?.group;
+        if (!grp) continue;
+
+        let remoteNormSpeed = 0;
+        if (peer.posture === 'kneel' && Number.isInteger(peer.seatIndex)) {
+          const seat = getAnyangruCushionByIndex(peer.seatIndex);
+          if (seat) {
+            grp.position.x += (seat.x - grp.position.x) * posBlend;
+            grp.position.z += (seat.z - grp.position.z) * posBlend;
+            grp.position.y += (ANYANGRU_CONFIG.cushionWorldY - grp.position.y) * posBlend;
+            const yawDiff = Math.atan2(Math.sin(-grp.rotation.y), Math.cos(-grp.rotation.y));
+            grp.rotation.y += yawDiff * rotBlend;
+          }
+        } else {
+          const dx = peer.targetPos.x - grp.position.x;
+          const dz = peer.targetPos.z - grp.position.z;
+          const dist = Math.hypot(dx, dz);
+
+          if (dist > 9.0) {
+            grp.position.copy(peer.targetPos);
+          } else if (dist > 0.014) {
+            grp.position.x += dx * posBlend;
+            grp.position.z += dz * posBlend;
+            grp.position.y = getGroundHeightAt(grp.position.x, grp.position.z);
+            remoteNormSpeed = Math.min(1, (dist * 3.8) / this.pcMoveSpeed);
+          } else {
+            const groundY = getGroundHeightAt(grp.position.x, grp.position.z);
+            grp.position.y += (groundY - grp.position.y) * posBlend;
+          }
+
+          const yawDiff = Math.atan2(
+            Math.sin(peer.targetYaw - grp.rotation.y),
+            Math.cos(peer.targetYaw - grp.rotation.y)
+          );
+          grp.rotation.y += yawDiff * rotBlend;
+        }
+
+        peer.actor.update(elapsed + peer.animSeed, dt, remoteNormSpeed);
+        if (peer.posture === 'walk' && remoteNormSpeed > 0.03) {
+          applyWiderWalkingStride(peer.actor, remoteNormSpeed);
+        }
       }
+    }
 
-      const dx = npc.targetPos.x - nPos.x;
-      const dz = npc.targetPos.z - nPos.z;
-      const dist = Math.hypot(dx, dz);
-
-      let npcNormSpeed = 0;
-      if (dist > 0.12) {
-        const step = Math.min(dist, npc.speed * dt);
-        const nextNpcX = nPos.x + (dx / dist) * step;
-        const nextNpcZ = nPos.z + (dz / dist) * step;
-        const clampedNpc = clampWalkableXZ(nextNpcX, nextNpcZ, nPos.x, nPos.z);
-        nPos.x = clampedNpc.x;
-        nPos.z = clampedNpc.z;
-        nPos.y = getGroundHeightAt(nPos.x, nPos.z);
-
-        const targetYaw = Math.atan2(-dx, -dz);
-        const diff = Math.atan2(
-          Math.sin(targetYaw - npc.actor.group.rotation.y),
-          Math.cos(targetYaw - npc.actor.group.rotation.y)
-        );
-        npc.actor.group.rotation.y += diff * (1 - Math.exp(-dt * 8));
-        npcNormSpeed = 0.68;
-      }
-
-      npc.actor.update(elapsed + npc.seed, dt, npcNormSpeed);
-      if (npcNormSpeed > 0.02) {
-        applyWiderWalkingStride(npc.actor, npcNormSpeed);
-      }
-    });
+    // 4-2. 로컬 플레이어 상태 100ms 쓰로틀 송신 (정지·명상 중 패킷 0바이트)
+    if (this.multiplayerClient) {
+      this.multiplayerClient.publishSelfState(
+        {
+          name: this.profile.name,
+          paletteIdx: this.profile.paletteIdx,
+          x: selfPos.x,
+          z: selfPos.z,
+          yaw: this.selfActor.group.rotation.y,
+          posture: this.posture,
+          seatIndex: this.occupiedSeatIndex
+        },
+        false
+      );
+    }
 
     // 5. 말풍선 스프라이트 및 바닥 합장 파문 업데이트
     for (let i = this.activeBubbles.length - 1; i >= 0; i--) {

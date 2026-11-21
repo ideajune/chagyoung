@@ -2,6 +2,7 @@
  * main.js — 산사 View-mung(차경 3D) 애플리케이션 진입점 및 모듈 오케스트레이션
  */
 
+import './engine/CoreRuntime.js';
 import { SceneManager } from './engine/SceneManager.js';
 import { CameraController } from './engine/CameraController.js';
 import { InputRouter } from './engine/InputRouter.js';
@@ -12,6 +13,7 @@ import { WandererManager } from './character/WandererManager.js';
 import { SanSaAudioEngine } from './audio/SanSaAudioEngine.js';
 import { WishStore } from './ui/WishStore.js';
 import { HudController } from './ui/HudController.js';
+import { MultiplayerClient } from './network/MultiplayerClient.js';
 
 function bootstrapApp() {
   const container = document.getElementById('webgl-container');
@@ -26,10 +28,10 @@ function bootstrapApp() {
   const buseoksaBuilder = new BuseoksaBuilder(sceneManager, materials);
   const buseoksaGroundMat = buseoksaBuilder.build();
 
-  sceneManager.loadEnvironmentPanorama('assets/environment/woodland.jpg');
+  sceneManager.loadEnvironmentPanorama('assets/environment/woodland.jpg?v=20261121-pbr2');
   materials.upgradeWithSurfaceManager(sceneManager, buseoksaGroundMat);
 
-  // 3. 인터랙티브 오브젝트(풍경종·연등·낙엽·파티클) 매니저 초기화
+  // 3. 인터랙티브 오브젝트(풍경종·연등·차경루 21석 방석·낙엽·파티클) 매니저 초기화
   const propsManager = new PropsManager(sceneManager, materials);
 
   // 4. 사운드스케이프 오디오 엔진, 소원 저장소 및 HUD 컨트롤러 초기화
@@ -44,13 +46,62 @@ function bootstrapApp() {
     audioEngine
   });
 
-  // 5. 플레이어 산사 나그네 및 동료 NPC 매니저 초기화
+  // 5. 플레이어 산사 나그네 및 원격 동시접속자(방당 최대 21명) 매니저 초기화
   const wandererManager = new WandererManager(sceneManager, cameraController, {
     onToast: (msg) => hudController.showToast(msg),
     onPostureChange: (isMeditating) => hudController.updatePostureButton(isMeditating),
     onBreathingToggle: (active) => hudController.toggleBreathingGuide(active)
   });
+
+  propsManager.registerCushionTargets(
+    buseoksaBuilder.cushionInteractiveEntries,
+    (seatIdx) => wandererManager.getSeatInfo(seatIdx)
+  );
+  propsManager.registerIndoorCushionTargets(
+    buseoksaBuilder.getIndoorCushionEntries(),
+    (hallSeatIdx) => wandererManager.getIndoorSeatInfo(hallSeatIdx)
+  );
+  propsManager.registerGardenLanternTargets(buseoksaBuilder.getGardenLanternTargets());
   hudController.bindWandererActions(wandererManager);
+
+  // 5-1. 21인 정원제 산방(채널) 실시간 멀티플레이어 클라이언트 연결
+  const multiplayerClient = new MultiplayerClient({
+    onAssignedProfile: (profilePatch) => {
+      wandererManager.applyAssignedProfile(profilePatch);
+    },
+    onRoomUpdate: (roomInfo) => {
+      hudController.updateRoomStatusUI(roomInfo);
+    },
+    onPeerJoined: (peer) => {
+      wandererManager.upsertRemotePlayer(peer);
+    },
+    onPeerUpdated: (peer) => {
+      wandererManager.upsertRemotePlayer(peer);
+    },
+    onPeerLeft: (peerId) => {
+      wandererManager.removeRemotePlayer(peerId);
+    },
+    onPeerAction: (peerId, actionType, payload) => {
+      if (actionType === 'bell') {
+        hudController.triggerBellRingInteraction({ fromRemote: true });
+        return;
+      }
+      wandererManager.handleRemoteAction(peerId, actionType, payload);
+    },
+    onWishesSync: (remoteWishes) => {
+      hudController.handleRemoteWishesSync(remoteWishes);
+    },
+    onRemoteWishAdded: (wish) => {
+      hudController.handleRemoteWishAdded(wish);
+    },
+    onRemoteWishHapjang: (wishId, hapjang) => {
+      hudController.handleRemoteWishHapjang(wishId, hapjang);
+    }
+  });
+
+  wandererManager.setMultiplayerClient(multiplayerClient);
+  hudController.setMultiplayerClient(multiplayerClient);
+  multiplayerClient.connect(wandererManager.getInitialNetworkProfile());
 
   // 6. 뷰포트 포인터·키보드·드래그앤드롭 단일 입력 라우터 연결
   const tooltipEl = document.getElementById('lantern-3d-tooltip');
@@ -72,6 +123,22 @@ function bootstrapApp() {
           }
           if (target.type === 'lantern' && target.wishId) {
             hudController.openWishReader(target.wishId);
+            return;
+          }
+          if (target.type === 'cushion' && Number.isInteger(target.seatIndex)) {
+            tooltipEl?.classList.remove('visible');
+            if (hudController.hasActiveWish()) {
+              hudController.closeWishReader();
+            }
+            wandererManager.sitAtSpecificSeat(target.seatIndex);
+            return;
+          }
+          if (target.type === 'hallCushion' && Number.isInteger(target.hallSeatIndex)) {
+            tooltipEl?.classList.remove('visible');
+            if (hudController.hasActiveWish()) {
+              hudController.closeWishReader();
+            }
+            wandererManager.sitAtHallCushion(target.hallSeatIndex);
             return;
           }
         }
@@ -103,7 +170,7 @@ function bootstrapApp() {
   sceneManager.onBeforeRender((elapsed, dt) => {
     wandererManager.updateFrame(elapsed, dt);
     cameraController.update(elapsed, dt);
-    buseoksaBuilder.updateClouds(elapsed);
+    buseoksaBuilder.update(elapsed, dt);
     propsManager.update(elapsed, dt);
   });
 
@@ -122,6 +189,7 @@ function bootstrapApp() {
     wandererManager,
     hudController,
     audioEngine,
+    multiplayerClient,
     inputRouter
   };
 }

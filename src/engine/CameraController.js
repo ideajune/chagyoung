@@ -15,11 +15,11 @@ export class CameraController {
     this.mode = 'follow';
     this.isDragging = false;
 
-    // 3인칭 시점 상태 및 광각 줌아웃 범위
+    // 3인칭 시점 상태 및 줌아웃 범위 (기존 대비 줌아웃 폭 약 50% 축소)
     this.yaw = 0.0;
     this.pitch = 0.02;
     this.minDistance = 2.0;
-    this.maxDistance = 22.0;
+    this.maxDistance = 11.8;
     this.defaultDistance = 3.65;
     this.distance = this.defaultDistance;
     this.wallBlockedRatio = 0;
@@ -119,10 +119,10 @@ export class CameraController {
       return;
     }
 
-    const rotSpeed = isTouch ? 0.0068 : 0.0055;
+    const rotSpeed = isTouch ? 0.0068 : 0.0072;
     const maxPitch = 0.36 + this.getZoomOutProgress() * 0.30;
     this.yaw -= dx * rotSpeed;
-    this.pitch = Math.max(-0.22, Math.min(maxPitch, this.pitch + dy * 0.0038));
+    this.pitch = Math.max(-0.22, Math.min(maxPitch, this.pitch + dy * 0.0050));
   }
 
   handleWheel(deltaY) {
@@ -166,6 +166,50 @@ export class CameraController {
    */
   clipRayAgainstHall(sx, sz, cx, cz) {
     const hall = MURYANGSUJEON_CONFIG.hallCollisionBox;
+    const hallInt = MURYANGSUJEON_CONFIG.interior;
+    // 전면 열린 중앙 3칸 출입구(어칸·좌우 협칸) 폭: 문턱 출입 시 카메라가 벽에 걸려 튀지 않도록 통과 허용
+    const doorwayHalfX = 7.8;
+
+    // 1) 캐릭터가 청풍사 실내에 들어와 있을 때
+    if (
+      hallInt &&
+      sx >= hallInt.minX - 0.25 &&
+      sx <= hallInt.maxX + 0.25 &&
+      sz >= hallInt.minZ &&
+      sz <= hallInt.maxZ + 0.25
+    ) {
+      const clampedX = Math.max(hallInt.minX + 0.55, Math.min(hallInt.maxX - 0.55, cx));
+      // 전면 열린 출입구(|x| <= 7.8) 쪽으로 나가는 시선은 문턱에서 급격히 끊기지 않도록 자연스럽게 통과 허용
+      const throughOpenDoorway = Math.abs(clampedX) <= doorwayHalfX && Math.abs(sx) <= doorwayHalfX + 0.5;
+      const minAllowedZ = throughOpenDoorway ? Math.min(cz, hallInt.minZ + 0.35) : hallInt.minZ + 0.35;
+      const clampedZ = Math.max(minAllowedZ, Math.min(hallInt.maxZ - 0.35, cz));
+      const changed = Math.abs(clampedX - cx) > 0.01 || Math.abs(clampedZ - cz) > 0.01;
+      return {
+        x: clampedX,
+        z: clampedZ,
+        blockedRatio: changed ? 0.2 : 0,
+        insideHall: true
+      };
+    }
+
+    // 2) 캐릭터가 전면 열린 출입구 문턱 바로 바깥(z ∈ [3.2, hallInt.minZ))에 있을 때:
+    //    열린 출입구 안쪽으로 들어가는 카메라 시선도 급격한 클리핑 없이 자연스럽게 통과
+    if (
+      hallInt &&
+      Math.abs(sx) <= doorwayHalfX &&
+      sz >= 3.2 &&
+      sz < hallInt.minZ &&
+      Math.abs(cx) <= doorwayHalfX
+    ) {
+      const clampedZ = Math.min(hallInt.maxZ - 0.35, cz);
+      return {
+        x: cx,
+        z: clampedZ,
+        blockedRatio: 0,
+        insideHall: cz >= hallInt.minZ
+      };
+    }
+
     const pad = 0.50;
     const hMinX = hall.minX - pad;
     const hMaxX = hall.maxX + pad;
@@ -325,9 +369,12 @@ export class CameraController {
     this.wallBlockedRatio = clipped.blockedRatio;
 
     const pitchSpan = 3.0 + zoomOutT * 2.2;
-    const wallReliefLift = this.wallBlockedRatio * zoomOutT * 1.55;
+    const wallReliefLift = clipped.insideHall ? 0 : this.wallBlockedRatio * zoomOutT * 1.55;
     let desiredCamY =
       selfPos.y + camHeightOffset + extraZoomHeight + wallReliefLift + this.pitch * pitchSpan;
+    if (clipped.insideHall) {
+      desiredCamY = Math.min(desiredCamY, 6.65);
+    }
 
     // 1) 청풍사 겹처마·현판 하단 여유 고도 소프트 클램프 (처마 범위 z>=3.15 진입 시에만 작동하여 앞마당 부감 시점 보존)
     const muryangEaveWeight = this.computeSmoothRectWeight(
@@ -378,7 +425,8 @@ export class CameraController {
       selfPos.y + lookHeightOffset - zoomOutT * 0.35 - this.pitch * (1.7 + zoomOutT * 0.6);
     const lookTargetZ = selfPos.z - cosYaw * lookAheadDist;
 
-    const camSmooth = this.camInitialized ? 1 - Math.exp(-dt * 12) : 1.0;
+    const smoothRate = this.isDragging ? 24 : 12;
+    const camSmooth = this.camInitialized ? 1 - Math.exp(-dt * smoothRate) : 1.0;
     this.camInitialized = true;
 
     this.camPos.x += (desiredCamX - this.camPos.x) * camSmooth;

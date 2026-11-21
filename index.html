@@ -15,9 +15,16 @@
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="산사 View-mung" />
   <title>산사 View-mung</title>
-  <link rel="stylesheet" href="styles.css?v=20261108-v2" />
-  <!-- Three.js r180 + PBR Surface & Photorealistic Landscape Core -->
-  <script src="sansa-core.js?v=20261107-wanderer2"></script>
+  <link rel="stylesheet" href="styles.css?v=20261121-pbr2" />
+  <!-- 공식 오픈소스 Three.js r180 (MIT) Import Map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./node_modules/three/build/three.module.js",
+        "three/addons/": "./node_modules/three/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 <body>
   <main class="app-stage" id="app-stage">
@@ -33,7 +40,7 @@
 
     <!-- 3. Ground Click Guide Text (PC & Mobile Always Visible) -->
     <div class="camera-hint-pill hud-chrome" id="camera-hint-pill">
-      👆 가까운 빈 바닥을 눌러주세요
+      👆 빈 바닥이나 차경루 방석을 눌러보세요
     </div>
 
     <!-- 4. Breathing Meditation Guide (숨 고르기 / 명상하기 연동) -->
@@ -42,8 +49,14 @@
       <div class="breath-text" id="breath-text">차경루 방석에 앉아 청풍사의 맑은 바람을 깊이 들이마십니다...</div>
     </div>
 
-    <!-- 5. Top Floating HUD Bar (스피커 아이콘 버튼 & 3선 설정 아이콘 버튼) -->
+    <!-- 5. Top Floating HUD Bar (산방 접속 인원 표시 & 음향 제어) -->
     <header class="top-bar hud-chrome">
+      <div class="room-status-pill" id="room-status-pill" aria-live="polite">
+        <span class="room-live-dot" id="room-live-dot" aria-hidden="true"></span>
+        <span class="room-status-name" id="room-status-name">청풍사 제1산방</span>
+        <span class="room-status-count" id="room-status-count">1 / 21명</span>
+      </div>
+
       <div class="top-bar-actions">
         <!-- 소리 켜기/끄기 버튼 (텍스트 없이 스피커 모양만 표시) -->
         <button
@@ -251,7 +264,7 @@
           <span>🙏 합장하기</span>
         </button>
 
-        <button class="dock-main-btn" id="spirit-stack-btn" type="button" title="차경루 방석에 올라가 좌선 명상하기 (단축키: C)">
+        <button class="dock-main-btn" id="spirit-stack-btn" type="button" title="차경루 가운데 앞자리부터 빈 방석에 앉아 명상하기 (단축키: C)">
           <span>🍵 명상하기</span>
         </button>
 
@@ -271,6 +284,6 @@
     <div class="toast-banner" id="toast-banner" role="status" aria-live="polite"></div>
   </main>
 
-  <script type="module" src="src/main.js?v=20261114-cp2"></script>
+  <script type="module" src="src/main.js?v=20261121-pbr2"></script>
 </body>
 </html>

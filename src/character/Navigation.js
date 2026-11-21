@@ -8,7 +8,10 @@ import {
   ANYANGRU_CONFIG,
   COURTYARD_CONFIG,
   ANYANGRU_CUSHIONS,
-  SPACE_OBSTACLES
+  SPACE_OBSTACLES,
+  YEONHWAJI_CONFIG,
+  WISH_GARDEN_CONFIG,
+  getCheongpungBridgeY
 } from '../config/worldConfig.js';
 
 const C_ENGINE = window.SANSA_CORE;
@@ -16,7 +19,30 @@ const C_ENGINE = window.SANSA_CORE;
 export function getGroundHeightAt(x, z) {
   const groundY = COURTYARD_CONFIG.groundY;
 
-  // 1. 무량수전 화강암 기단 상면 및 4면 둘레 회랑
+  // 1. 청풍사 본전 실내 마루(4면 보행 공간) 및 전면 문턱 경사 보간
+  const hallInt = MURYANGSUJEON_CONFIG.interior;
+  if (
+    hallInt &&
+    x >= hallInt.minX - 0.15 &&
+    x <= hallInt.maxX + 0.15 &&
+    z >= hallInt.thresholdEndZ &&
+    z <= hallInt.maxZ + 0.35
+  ) {
+    return hallInt.floorY;
+  }
+  if (
+    hallInt &&
+    x >= -8.4 &&
+    x <= 8.4 &&
+    z > hallInt.thresholdStartZ &&
+    z < hallInt.thresholdEndZ
+  ) {
+    const t =
+      (z - hallInt.thresholdStartZ) / (hallInt.thresholdEndZ - hallInt.thresholdStartZ);
+    return MURYANGSUJEON_CONFIG.verandaY + t * (hallInt.floorY - MURYANGSUJEON_CONFIG.verandaY);
+  }
+
+  // 1-1. 무량수전 화강암 기단 상면 및 4면 둘레 회랑
   if (
     x >= MURYANGSUJEON_CONFIG.stylobateMinX &&
     x <= MURYANGSUJEON_CONFIG.stylobateMaxX &&
@@ -51,7 +77,7 @@ export function getGroundHeightAt(x, z) {
     return groundY + t * (MURYANGSUJEON_CONFIG.verandaY - groundY);
   }
 
-  // 3. 안양루 우물마루 및 14개 좌선 방석 (z <= -15.55)
+  // 3. 차경루 우물마루 및 21개 좌선 방석 (z <= -15.55)
   if (z <= ANYANGRU_CONFIG.stepsEndZ) {
     for (const c of ANYANGRU_CUSHIONS) {
       if (Math.hypot(x - c.x, z - c.z) < ANYANGRU_CONFIG.cushionHitRadius) {
@@ -69,13 +95,67 @@ export function getGroundHeightAt(x, z) {
     return groundY + t * (ANYANGRU_CONFIG.worldDeckY - groundY);
   }
 
+  // 4-1. 동쪽 연화지 청풍교 아치형 목교 보행 높이
+  const br = YEONHWAJI_CONFIG.bridge;
+  const deckMinZ = br.deckMinZ ?? br.minZ;
+  const deckMaxZ = br.deckMaxZ ?? br.maxZ;
+  if (x >= br.minX && x <= br.maxX && z >= deckMinZ && z <= deckMaxZ) {
+    return getCheongpungBridgeY(x);
+  }
+
+  // 4-2. 서쪽 소원 연등 정원 소원정 기단 및 사방 2단 돌계단 높이
+  const wg = WISH_GARDEN_CONFIG;
+  const dxWg = Math.abs(x - wg.cx);
+  const dzWg = Math.abs(z - wg.cz);
+  if (dxWg <= wg.plinthHalfW && dzWg <= wg.plinthHalfD) {
+    return wg.plinthY;
+  }
+  if (
+    (dxWg <= wg.plinthHalfW + wg.stairExtend && dzWg <= 1.45) ||
+    (dzWg <= wg.plinthHalfD + wg.stairExtend && dxWg <= 1.45)
+  ) {
+    const over = Math.max(dxWg - wg.plinthHalfW, dzWg - wg.plinthHalfD, 0);
+    const t = Math.max(0, Math.min(1, 1 - over / wg.stairExtend));
+    return groundY + t * (wg.plinthY - groundY);
+  }
+
   // 5. 앞마당 및 박석길
   return groundY;
 }
 
-export function isPointBlocked(x, z, extraMargin = 0) {
+const CUSHION_AVOID_RADIUS = 0.64;
+const HALL_CUSHION_AVOID_RADIUS = 0.56;
+
+function isSeatAllowed(seatIndex, allowedSeats) {
+  if (allowedSeats === null || allowedSeats === undefined) return false;
+  if (typeof allowedSeats === 'number') return seatIndex === allowedSeats;
+  if (allowedSeats instanceof Set) return allowedSeats.has(seatIndex);
+  return false;
+}
+
+function isHallSeatAllowed(hallSeatIndex, allowedSeats) {
+  if (allowedSeats === null || allowedSeats === undefined) return false;
+  const key = `hall:${hallSeatIndex}`;
+  if (typeof allowedSeats === 'string') return allowedSeats === key;
+  if (allowedSeats instanceof Set) return allowedSeats.has(key);
+  return false;
+}
+
+function isOnPondBridge(pond, x, z, margin = 0) {
+  const b = pond.bridge;
+  if (!b) return false;
+  return x >= b.minX && x <= b.maxX && z >= b.minZ + margin && z <= b.maxZ - margin;
+}
+
+export function isPointBlocked(x, z, extraMargin = 0, allowedSeats = null) {
   const { minX, maxX, minZ, maxZ } = COURTYARD_CONFIG.walkBounds.block;
   if (x < minX || x > maxX || z < minZ || z > maxZ) return true;
+  if (
+    z < COURTYARD_CONFIG.walkBounds.anyangruMaxZ &&
+    Math.abs(x) > COURTYARD_CONFIG.walkBounds.anyangruHalfX
+  ) {
+    return true;
+  }
 
   const obs = SPACE_OBSTACLES.buseoksa;
   for (const c of obs.circles) {
@@ -96,10 +176,46 @@ export function isPointBlocked(x, z, extraMargin = 0) {
     }
   }
 
+  if (obs.ponds) {
+    for (const p of obs.ponds) {
+      if (isOnPondBridge(p, x, z, extraMargin)) continue;
+      const rx = p.rx + extraMargin;
+      const rz = p.rz + extraMargin;
+      const nx = (x - p.cx) / rx;
+      const nz = (z - p.cz) / rz;
+      if (nx * nx + nz * nz < 1) return true;
+    }
+  }
+
+  // 차경루 빈 방석 밟기 방지 (목표 착석 방석 및 출발 이탈 방석만 예외 허용)
+  if (z <= ANYANGRU_CONFIG.stepsEndZ + 0.5) {
+    const cr = CUSHION_AVOID_RADIUS + extraMargin;
+    const crSq = cr * cr;
+    for (const c of ANYANGRU_CUSHIONS) {
+      if (isSeatAllowed(c.index, allowedSeats)) continue;
+      const dx = x - c.x;
+      const dz = z - c.z;
+      if (dx * dx + dz * dz < crSq) return true;
+    }
+  }
+
+  // 청풍사 실내 빈 방석 밟기 방지 (목표 착석 방석 및 출발 이탈 방석만 예외 허용)
+  const hallCushions = MURYANGSUJEON_CONFIG.interior?.cushions;
+  if (hallCushions && z >= 7.0 && z <= 30.0) {
+    const hr = HALL_CUSHION_AVOID_RADIUS + extraMargin;
+    const hrSq = hr * hr;
+    for (const c of hallCushions) {
+      if (isHallSeatAllowed(c.index, allowedSeats)) continue;
+      const dx = x - c.x;
+      const dz = z - c.z;
+      if (dx * dx + dz * dz < hrSq) return true;
+    }
+  }
+
   return false;
 }
 
-export function hasLineOfSight(x0, z0, x1, z1, extraMargin = 0.04) {
+export function hasLineOfSight(x0, z0, x1, z1, extraMargin = 0.04, allowedSeats = null) {
   const dist = Math.hypot(x1 - x0, z1 - z0);
   if (dist < 0.05) return true;
   const steps = Math.max(4, Math.ceil(dist / 0.24));
@@ -107,12 +223,12 @@ export function hasLineOfSight(x0, z0, x1, z1, extraMargin = 0.04) {
     const t = i / steps;
     const sx = x0 + (x1 - x0) * t;
     const sz = z0 + (z1 - z0) * t;
-    if (isPointBlocked(sx, sz, extraMargin)) return false;
+    if (isPointBlocked(sx, sz, extraMargin, allowedSeats)) return false;
   }
   return true;
 }
 
-export function clampWalkableXZ(x, z, prevX = null, prevZ = null) {
+export function clampWalkableXZ(x, z, prevX = null, prevZ = null, allowedSeats = null) {
   const { clamp, anyangruMaxZ, anyangruHalfX } = COURTYARD_CONFIG.walkBounds;
   const { minX, maxX, minZ, maxZ } = clamp;
 
@@ -121,6 +237,18 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null) {
 
   if (cz < anyangruMaxZ) {
     cx = Math.max(-anyangruHalfX, Math.min(anyangruHalfX, cx));
+  }
+
+  // 청풍교 상판·난간 영역 클릭/진입 시 연못 바깥으로 튕겨나가지 않고 다리 보행 중앙선으로 정확히 정렬
+  const br = YEONHWAJI_CONFIG.bridge;
+  if (
+    prevX === null &&
+    cx >= br.minX - 0.3 &&
+    cx <= br.maxX + 0.3 &&
+    cz >= (br.deckMinZ ?? -5.75) - 0.15 &&
+    cz <= (br.deckMaxZ ?? -3.25) + 0.15
+  ) {
+    cz = Math.max(br.minZ + 0.04, Math.min(br.maxZ - 0.04, cz));
   }
 
   const obs = SPACE_OBSTACLES.buseoksa;
@@ -162,6 +290,75 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null) {
       }
     }
 
+    if (obs.ponds) {
+      for (const p of obs.ponds) {
+        if (isOnPondBridge(p, cx, cz, 0)) continue;
+        const nx = (cx - p.cx) / p.rx;
+        const nz = (cz - p.cz) / p.rz;
+        const ellipSq = nx * nx + nz * nz;
+        if (ellipSq < 1.0) {
+          if (ellipSq > 0.0001) {
+            const scale = 1.015 / Math.sqrt(ellipSq);
+            cx = p.cx + (cx - p.cx) * scale;
+            cz = p.cz + (cz - p.cz) * scale;
+          } else {
+            cx = p.cx - (p.rx + 0.08);
+          }
+        }
+      }
+    }
+
+    // 차경루 빈 방석 밟기 방지 밀어내기
+    if (cz <= ANYANGRU_CONFIG.stepsEndZ + 0.5) {
+      for (const c of ANYANGRU_CUSHIONS) {
+        if (isSeatAllowed(c.index, allowedSeats)) continue;
+        const dx = cx - c.x;
+        const dz = cz - c.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < CUSHION_AVOID_RADIUS * CUSHION_AVOID_RADIUS) {
+          const dist = Math.sqrt(distSq);
+          if (dist > 0.0001) {
+            cx = c.x + (dx / dist) * (CUSHION_AVOID_RADIUS + 0.015);
+            cz = c.z + (dz / dist) * (CUSHION_AVOID_RADIUS + 0.015);
+          } else if (prevX !== null && prevZ !== null) {
+            const pdx = prevX - c.x;
+            const pdz = prevZ - c.z;
+            const pLen = Math.hypot(pdx, pdz) || 1;
+            cx = c.x + (pdx / pLen) * (CUSHION_AVOID_RADIUS + 0.02);
+            cz = c.z + (pdz / pLen) * (CUSHION_AVOID_RADIUS + 0.02);
+          } else {
+            cz = c.z + (CUSHION_AVOID_RADIUS + 0.02);
+          }
+        }
+      }
+    }
+
+    // 청풍사 실내 빈 방석 밟기 방지 밀어내기
+    const hallCushions = MURYANGSUJEON_CONFIG.interior?.cushions;
+    if (hallCushions && cz >= 7.0 && cz <= 30.0) {
+      for (const c of hallCushions) {
+        if (isHallSeatAllowed(c.index, allowedSeats)) continue;
+        const dx = cx - c.x;
+        const dz = cz - c.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < HALL_CUSHION_AVOID_RADIUS * HALL_CUSHION_AVOID_RADIUS) {
+          const dist = Math.sqrt(distSq);
+          if (dist > 0.0001) {
+            cx = c.x + (dx / dist) * (HALL_CUSHION_AVOID_RADIUS + 0.015);
+            cz = c.z + (dz / dist) * (HALL_CUSHION_AVOID_RADIUS + 0.015);
+          } else if (prevX !== null && prevZ !== null) {
+            const pdx = prevX - c.x;
+            const pdz = prevZ - c.z;
+            const pLen = Math.hypot(pdx, pdz) || 1;
+            cx = c.x + (pdx / pLen) * (HALL_CUSHION_AVOID_RADIUS + 0.02);
+            cz = c.z + (pdz / pLen) * (HALL_CUSHION_AVOID_RADIUS + 0.02);
+          } else {
+            cz = c.z + (HALL_CUSHION_AVOID_RADIUS + 0.02);
+          }
+        }
+      }
+    }
+
     cx = Math.max(minX, Math.min(maxX, cx));
     cz = Math.max(minZ, Math.min(maxZ, cz));
   }
@@ -169,8 +366,8 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null) {
   return { x: cx, z: cz };
 }
 
-export function findObstacleFreePath(startX, startZ, goalX, goalZ) {
-  if (hasLineOfSight(startX, startZ, goalX, goalZ, 0.05)) {
+export function findObstacleFreePath(startX, startZ, goalX, goalZ, allowedSeats = null) {
+  if (hasLineOfSight(startX, startZ, goalX, goalZ, 0.05, allowedSeats)) {
     return [{ x: goalX, z: goalZ }];
   }
 
@@ -223,7 +420,7 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ) {
   let bestDistToGoal = Math.hypot(goalNode.gx - startNode.gx, goalNode.gz - startNode.gz);
   let iterations = 0;
 
-  while (open.length > 0 && iterations < 4500) {
+  while (open.length > 0 && iterations < 14000) {
     iterations++;
     let bestIdx = 0;
     for (let i = 1; i < open.length; i++) {
@@ -253,14 +450,17 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ) {
       if (closed.has(nKey)) continue;
 
       const wPos = toWorld(nx, nz);
-      if (nKey !== goalKey && isPointBlocked(wPos.x, wPos.z, 0.05)) {
+      if (nKey !== goalKey && isPointBlocked(wPos.x, wPos.z, 0.05, allowedSeats)) {
         continue;
       }
 
       if (dx !== 0 && dz !== 0) {
         const sideA = toWorld(current.gx + dx, current.gz);
         const sideB = toWorld(current.gx, current.gz + dz);
-        if (isPointBlocked(sideA.x, sideA.z, 0.02) || isPointBlocked(sideB.x, sideB.z, 0.02)) {
+        if (
+          isPointBlocked(sideA.x, sideA.z, 0.02, allowedSeats) ||
+          isPointBlocked(sideB.x, sideB.z, 0.02, allowedSeats)
+        ) {
           continue;
         }
       }
@@ -301,7 +501,8 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ) {
           rawPts[anchorIdx].z,
           rawPts[testIdx].x,
           rawPts[testIdx].z,
-          0.04
+          0.04,
+          allowedSeats
         )
       ) {
         furthestIdx = testIdx;
@@ -315,8 +516,25 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ) {
   return smoothed;
 }
 
-export function buildWalkPath(startPos, endPos) {
-  const clampedEnd = clampWalkableXZ(endPos.x, endPos.z, startPos.x, startPos.z);
+export function buildWalkPath(startPos, endPos, targetSeat = null) {
+  const allowedSeats = new Set();
+  if (Number.isInteger(targetSeat) || typeof targetSeat === 'string') {
+    allowedSeats.add(targetSeat);
+  }
+  // 방석 위에서 일어서서 출발할 때 현재 방석에서만 빠져나올 수 있도록 출발 방석 허용
+  for (const c of ANYANGRU_CUSHIONS) {
+    if (Math.hypot(startPos.x - c.x, startPos.z - c.z) <= CUSHION_AVOID_RADIUS + 0.14) {
+      allowedSeats.add(c.index);
+    }
+  }
+  const hallCushions = MURYANGSUJEON_CONFIG.interior?.cushions || [];
+  for (const c of hallCushions) {
+    if (Math.hypot(startPos.x - c.x, startPos.z - c.z) <= HALL_CUSHION_AVOID_RADIUS + 0.14) {
+      allowedSeats.add(`hall:${c.index}`);
+    }
+  }
+
+  const clampedEnd = clampWalkableXZ(endPos.x, endPos.z, startPos.x, startPos.z, allowedSeats);
 
   const stageTargets = [];
   const mPortal = MURYANGSUJEON_CONFIG.stepPortal;
@@ -382,7 +600,7 @@ export function buildWalkPath(startPos, endPos) {
   let curZ = startPos.z;
 
   for (const stage of stageTargets) {
-    const subPath = findObstacleFreePath(curX, curZ, stage.x, stage.z);
+    const subPath = findObstacleFreePath(curX, curZ, stage.x, stage.z, allowedSeats);
     for (const pt of subPath) {
       const y = getGroundHeightAt(pt.x, pt.z);
       points.push(new C_ENGINE.Vector3(pt.x, y, pt.z));
@@ -394,19 +612,59 @@ export function buildWalkPath(startPos, endPos) {
   return points;
 }
 
-export function findNearestAnyangruCushion(x, z, { frontRowOnly = false } = {}) {
-  let candidates = ANYANGRU_CUSHIONS;
-  if (frontRowOnly) {
-    const frontRowZ = Math.min(...ANYANGRU_CUSHIONS.map((c) => c.z));
-    const filtered = ANYANGRU_CUSHIONS.filter((c) => Math.abs(c.z - frontRowZ) < 0.05);
-    if (filtered.length > 0) {
-      candidates = filtered;
-    }
+export function getAnyangruCushionByIndex(seatIndex) {
+  if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex >= ANYANGRU_CUSHIONS.length) {
+    return null;
+  }
+  return ANYANGRU_CUSHIONS[seatIndex] || null;
+}
+
+// 가운데 앞자리(1줄 중앙 -> 좌우 -> 2줄 중앙 -> 좌우 -> 3줄 중앙 -> 좌우) 우선순위 정렬
+const FRONT_CENTER_PRIORITY_CUSHIONS = [...ANYANGRU_CUSHIONS].sort((a, b) => {
+  if (a.row !== b.row) return a.row - b.row;
+  const distCenterA = Math.abs(a.col - 4);
+  const distCenterB = Math.abs(b.col - 4);
+  if (distCenterA !== distCenterB) return distCenterA - distCenterB;
+  return a.col - b.col;
+});
+
+/**
+ * 차경루 가운데 앞자리(1줄 중앙)부터 순차적으로 비어 있는 방석을 탐색합니다.
+ * - occupiedSeatIndices에 포함된 좌석(다른 나그네 착석/이동 중)은 제외합니다.
+ * - 21석이 모두 점유된 경우 { cushion: null, dist: Infinity }를 반환합니다.
+ */
+export function selectPriorityAnyangruCushion(x, z, occupiedSeatIndices = new Set()) {
+  const occupied =
+    occupiedSeatIndices instanceof Set
+      ? occupiedSeatIndices
+      : new Set(occupiedSeatIndices || []);
+
+  for (const c of FRONT_CENTER_PRIORITY_CUSHIONS) {
+    if (occupied.has(c.index)) continue;
+    return {
+      cushion: c,
+      dist: Math.hypot(x - c.x, z - c.z)
+    };
   }
 
-  let best = candidates[0];
+  return {
+    cushion: null,
+    dist: Infinity
+  };
+}
+
+export function findNearestAnyangruCushion(
+  x,
+  z,
+  { occupiedSeatIndices = null } = {}
+) {
+  if (occupiedSeatIndices) {
+    return selectPriorityAnyangruCushion(x, z, occupiedSeatIndices);
+  }
+
+  let best = ANYANGRU_CUSHIONS[0];
   let bestDist = Infinity;
-  for (const c of candidates) {
+  for (const c of ANYANGRU_CUSHIONS) {
     const d = Math.hypot(x - c.x, z - c.z);
     if (d < bestDist) {
       bestDist = d;

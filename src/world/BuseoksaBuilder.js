@@ -6,10 +6,15 @@
 import {
   MURYANGSUJEON_CONFIG,
   ANYANGRU_CONFIG,
-  COURTYARD_CONFIG
+  COURTYARD_CONFIG,
+  YEONHWAJI_CONFIG
 } from '../config/worldConfig.js';
 import { TextureFactory } from './TextureFactory.js';
 import { buildRealisticPaljakRoof } from './PaljakRoofBuilder.js';
+import { YeonhwajiBuilder } from './YeonhwajiBuilder.js';
+import { WishGardenBuilder } from './WishGardenBuilder.js';
+import { CheongpungInteriorBuilder } from './CheongpungInteriorBuilder.js';
+import { batchStaticMeshes } from './StaticMeshBatcher.js';
 
 const C_ENGINE = window.SANSA_CORE;
 
@@ -26,17 +31,24 @@ export class BuseoksaBuilder {
     this.cloudPlanes = [];
     this.buseoksaPineAnchors = [];
     this.scannedSeasonalTwigMats = [];
+    this.cushionInteractiveEntries = [];
+
+    // PC와 모바일 동일한 3D 디자인·색감·디테일 유지
+    this.yeonhwajiBuilder = new YeonhwajiBuilder(materials, false);
+    this.wishGardenBuilder = new WishGardenBuilder(materials, false);
+    this.interiorBuilder = new CheongpungInteriorBuilder(materials, false);
   }
 
   build() {
     const g = this.buseoksaGroup;
     const m = this.materials;
 
-    // 1. 360° 마당 및 산자락 지형 메쉬
+    // 1. 360° 마당 및 산자락 지형 메쉬 (동쪽 연화지·서쪽 소원 연등 정원 테라스 및 연못 분지 포함)
     this.buseoksaGroundMat = m.matGround.clone();
-    const groundGeo = new C_ENGINE.PlaneGeometry(340, 320, 84, 84);
+    const groundGeo = new C_ENGINE.PlaneGeometry(340, 320, 112, 108);
     groundGeo.rotateX(-Math.PI / 2);
     const gPos = groundGeo.getAttribute('position');
+    const pond = YEONHWAJI_CONFIG;
     for (let i = 0; i < gPos.count; i++) {
       const x = gPos.getX(i);
       const z = gPos.getZ(i);
@@ -45,9 +57,26 @@ export class BuseoksaBuilder {
         const d = -25.0 - z;
         y = -0.82 - Math.min(5.2, d * 0.2) + Math.sin(x * 0.07) * Math.min(1.4, d * 0.035);
       } else {
-        const sideDist = Math.max(0, Math.abs(x) - 22.0);
+        // 동·서쪽 연화지/정원 구간(z ∈ [-16, 8])은 |x|=40.5까지 평탄화, 그 외 구간은 |x|=22부터 산자락 상승
+        const wingBlend =
+          z >= -16.5 && z <= 8.5
+            ? 1.0
+            : z < -16.5
+              ? Math.max(0, 1 - (-16.5 - z) / 5.0)
+              : Math.max(0, 1 - (z - 8.5) / 6.0);
+        const flatHalfX = 22.0 + wingBlend * 18.5;
+        const sideDist = Math.max(0, Math.abs(x) - flatHalfX);
         const sideLift = Math.min(7.5, Math.pow(sideDist * 0.075, 1.35) * 4.4);
         y = -0.82 + sideLift + Math.sin(x * 0.2 + z * 0.18) * 0.025;
+
+        // 동쪽 연화지 연못 분지 깊이 굴착
+        const pnx = (x - pond.cx) / pond.rx;
+        const pnz = (z - pond.cz) / pond.rz;
+        const pDistSq = pnx * pnx + pnz * pnz;
+        if (pDistSq < 1.12) {
+          const depthFactor = Math.max(0, Math.min(1, (1.12 - pDistSq) / 0.35));
+          y = y * (1 - depthFactor) + -2.18 * depthFactor;
+        }
       }
       gPos.setY(i, y);
     }
@@ -119,10 +148,14 @@ export class BuseoksaBuilder {
     const { stoneLantern } = COURTYARD_CONFIG;
     this.buildBuseoksaStoneLantern(g, stoneLantern.x, stoneLantern.y, stoneLantern.z);
 
-    // 9. 안양루 누각 및 14개 명상 방석
+    // 9. 안양루 누각 및 21개 명상 방석
     this.buildPavilion3D(g, ANYANGRU_CONFIG);
 
-    // 10. 수목 앵커 구성 (스캔 소나무 및 단풍나무)
+    // 9-1. 동쪽 연화지(청풍교 · 비단잉어 · 연꽃) 및 서쪽 소원 연등 정원(소원정 · 등가 아치)
+    this.yeonhwajiBuilder.build(g);
+    this.wishGardenBuilder.build(g);
+
+    // 10. 수목 앵커 구성 (기존 실사 스캔 소나무·단풍나무 pine.glb 원복)
     this.buseoksaPineAnchors = COURTYARD_CONFIG.scannedTreeAnchors.map((spec) => ({ ...spec }));
     COURTYARD_CONFIG.innerSeasonalTrees.forEach(({ x, y, z, scale }) => {
       this.buildSeasonalTree(g, x, y, z, scale);
@@ -136,6 +169,9 @@ export class BuseoksaBuilder {
 
     // 12. 운해 및 상층 구름
     this.buildSeaOfClouds(g);
+
+    // 12-1. 정적 건축·조경 메쉬 재질별 통합 배칭 (Draw Call 및 초기 PBR UV 투영 비용 대폭 절감)
+    batchStaticMeshes(g, m);
 
     // 13. 스캔 소나무·단풍나무 GLB 비동기 로드 및 배치
     this.loadAndPopulatePines();
@@ -242,7 +278,9 @@ export class BuseoksaBuilder {
         );
       }
     }
-    for (const pz of [5.7, 7.8, 9.7, 11.5, 13.4, 15.5]) {
+    const sidePilasterCount = Math.max(6, Math.round((cfg.stylobateMaxZ - cfg.stylobateMinZ) / 2.2) + 1);
+    for (let pi = 0; pi < sidePilasterCount; pi++) {
+      const pz = cfg.stylobateMinZ + 0.15 + (pi / (sidePilasterCount - 1)) * (cfg.stylobateMaxZ - cfg.stylobateMinZ - 0.3);
       for (const px of [cfg.stylobateMinX - 0.01, cfg.stylobateMaxX + 0.01]) {
         m.createMesh(
           new C_ENGINE.RoundedBoxGeometry(0.14, 0.72, 0.32, 2, 0.02),
@@ -273,17 +311,18 @@ export class BuseoksaBuilder {
       x: 0,
       bottomY: -0.82,
       topY,
-      startZ: 17.32,
+      startZ: cfg.rearStepsStartZ,
       endZ: cfg.stylobateMaxZ - 0.03,
       treadWidth: 3.84,
       cheekWidth: 0.34,
       stepCount: 5
     });
 
-    // 무량수전 좌·우·후면 외곽 산책 박석 징검돌
+    // 무량수전 좌·우·후면 외곽 산책 박석 징검돌 (확장된 기단 길이에 맞춰 동적 배치)
+    const sideStepCount = Math.ceil((cfg.stylobateMaxZ + 2.5 - 4.2) / 1.75);
     for (const sideSign of [-1, 1]) {
-      for (let i = 0; i < 9; i++) {
-        const sz = 4.2 + i * 1.65;
+      for (let i = 0; i < sideStepCount; i++) {
+        const sz = 4.2 + i * 1.75;
         const sx = sideSign * (18.4 + Math.sin(i * 0.7) * 0.22);
         m.createMesh(
           new C_ENGINE.RoundedBoxGeometry(1.18, 0.065, 0.96, 2, 0.02),
@@ -293,13 +332,14 @@ export class BuseoksaBuilder {
         );
       }
     }
+    const rearPathZ = cfg.stylobateMaxZ + 2.6;
     for (let ix = -8; ix <= 8; ix++) {
       m.createMesh(
         new C_ENGINE.RoundedBoxGeometry(1.26, 0.065, 0.98, 2, 0.02),
         m.matStone,
         hg,
         {
-          pos: [ix * 2.15, -0.79, 18.25 + Math.cos(ix * 0.6) * 0.16],
+          pos: [ix * 2.15, -0.79, rearPathZ + Math.cos(ix * 0.6) * 0.16],
           rot: [0, (ix % 2) * 0.03, 0],
           tone: 0.93 + (Math.abs(ix) % 3) * 0.025
         }
@@ -465,13 +505,31 @@ export class BuseoksaBuilder {
 
     for (const wz of [fZ, rZ]) {
       const zSign = wz < midZ ? -1 : 1;
-      // 하인방/문지방 (전·후면 통재)
-      m.createMesh(
-        new C_ENGINE.RoundedBoxGeometry(totalSpanX + 0.3, 0.22, 0.34, 2, 0.02),
-        m.matDarkTimber,
-        hg,
-        { pos: [0, topY + 0.28, wz], tone: 0.90 }
-      );
+      // 하인방/문지방 (전면 열린 3칸 출입구는 바닥과 자연스럽게 이어지는 낮은 문턱으로 처리)
+      if (wz === fZ) {
+        for (const sideX of [-11.3, 11.3]) {
+          m.createMesh(
+            new C_ENGINE.RoundedBoxGeometry(5.9, 0.22, 0.34, 2, 0.02),
+            m.matDarkTimber,
+            hg,
+            { pos: [sideX, topY + 0.28, wz], tone: 0.90 }
+          );
+        }
+        // 전면 중앙 3칸 개방 출입구: 바닥(0.20 -> 0.28)과 자연스럽게 이어지는 낮은 목조 문턱 디딤판
+        m.createMesh(
+          new C_ENGINE.RoundedBoxGeometry(16.8, 0.055, 0.42, 2, 0.012),
+          m.matDarkTimber,
+          hg,
+          { pos: [0, topY + 0.045, wz], tone: 0.86 }
+        );
+      } else {
+        m.createMesh(
+          new C_ENGINE.RoundedBoxGeometry(totalSpanX + 0.3, 0.22, 0.34, 2, 0.02),
+          m.matDarkTimber,
+          hg,
+          { pos: [0, topY + 0.28, wz], tone: 0.90 }
+        );
+      }
       // 문얼굴 상인방 (y = 4.02)
       m.createMesh(
         new C_ENGINE.RoundedBoxGeometry(totalSpanX + 0.4, 0.22, 0.36, 2, 0.02),
@@ -538,129 +596,375 @@ export class BuseoksaBuilder {
 
     // 4. 무량수전 법당 내부 성소(내진) 및 실사 불단 배경 (열린 전면 3칸 문 너머 입체 감상)
     const sanctGroup = new C_ENGINE.Group();
-    // 내진 바닥(전돌 마루), 우물천장, 좌우 어두운 내벽
-    m.createMesh(
-      new C_ENGINE.BoxGeometry(17.8, 0.14, 4.4),
-      m.matDarkTimber,
-      sanctGroup,
-      { pos: [0, topY + 0.22, 9.25], castShadow: false, tone: 0.65 }
-    );
-    const sanctCeil = new C_ENGINE.Mesh(
-      new C_ENGINE.PlaneGeometry(17.8, 4.4),
-      darkSanctuaryMat
-    );
-    sanctCeil.rotation.x = Math.PI / 2;
-    sanctCeil.position.set(0, 5.45, 9.25);
-    sanctGroup.add(sanctCeil);
+    // 내진 바닥(짙은 고목 널마루, 은은한 광택), 서까래 노출 우물천장·천창, 회벽+목조 인방 좌우 내벽
+    const hallInt = cfg.interior;
+    const intFloorY = hallInt.floorY;
+    const hallDepth = totalSpanZ - 0.15;
 
-    for (const sx of [-8.75, 8.75]) {
-      const sWall = new C_ENGINE.Mesh(new C_ENGINE.PlaneGeometry(4.4, 5.1), darkSanctuaryMat);
-      sWall.rotation.y = sx < 0 ? Math.PI / 2 : -Math.PI / 2;
-      sWall.position.set(sx, 2.90, 9.25);
-      sanctGroup.add(sWall);
+    // 짙은 호두나무 고목 널마루 텍스처 + 요철 범프맵 (반사 없는 자연스러운 전통 마루 질감)
+    const floorCanvas = document.createElement('canvas');
+    floorCanvas.width = 512;
+    floorCanvas.height = 512;
+    const fCtx = floorCanvas.getContext('2d');
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = 512;
+    bumpCanvas.height = 512;
+    const bCtx = bumpCanvas.getContext('2d');
+
+    fCtx.fillStyle = '#2d2016';
+    fCtx.fillRect(0, 0, 512, 512);
+    bCtx.fillStyle = '#909090';
+    bCtx.fillRect(0, 0, 512, 512);
+
+    const plankRows = 10;
+    const rowH = 512 / plankRows;
+    for (let r = 0; r < plankRows; r++) {
+      const y0 = r * rowH;
+      const baseShade = 42 + ((r * 17) % 16);
+      fCtx.fillStyle = `rgb(${baseShade + 14}, ${baseShade}, ${baseShade - 13})`;
+      fCtx.fillRect(0, y0 + 2, 512, rowH - 3);
+      bCtx.fillStyle = '#b8b8b8';
+      bCtx.fillRect(0, y0 + 2, 512, rowH - 3);
+
+      // 자연스러운 목재 나뭇결 스트로크
+      for (let g = 0; g < 14; g++) {
+        const gy = y0 + 4 + ((g * 7 + r * 3) % Math.max(4, Math.floor(rowH - 6)));
+        fCtx.fillStyle = g % 2 === 0 ? 'rgba(24, 15, 9, 0.16)' : 'rgba(92, 68, 46, 0.12)';
+        fCtx.fillRect(0, gy, 512, 1.5);
+      }
+
+      // 널빤지 틈새 홈 (가로 및 엇갈린 세로 이음매)
+      fCtx.fillStyle = '#18100a';
+      fCtx.fillRect(0, y0, 512, 2.5);
+      bCtx.fillStyle = '#252525';
+      bCtx.fillRect(0, y0, 512, 2.5);
+
+      const seam1 = ((r * 193 + 80) % 420) + 40;
+      fCtx.fillRect(seam1, y0, 2.5, rowH);
+      bCtx.fillRect(seam1, y0, 2.5, rowH);
     }
-    const sanctBackBacking = new C_ENGINE.Mesh(
-      new C_ENGINE.PlaneGeometry(17.8, 5.1),
-      darkSanctuaryMat
-    );
-    sanctBackBacking.rotation.y = Math.PI;
-    sanctBackBacking.position.set(0, 2.90, 11.35);
-    sanctGroup.add(sanctBackBacking);
+    const hallFloorTex = new C_ENGINE.CanvasTexture(floorCanvas);
+    hallFloorTex.colorSpace = C_ENGINE.SRGBColorSpace;
+    hallFloorTex.wrapS = C_ENGINE.RepeatWrapping;
+    hallFloorTex.wrapT = C_ENGINE.RepeatWrapping;
+    hallFloorTex.repeat.set(8, 7);
 
-    // 내부 고주(高柱) 4주
-    for (const gx of [-3.2, 3.2]) {
-      for (const gz of [8.85, 10.95]) {
+    const hallFloorBump = new C_ENGINE.CanvasTexture(bumpCanvas);
+    hallFloorBump.wrapS = C_ENGINE.RepeatWrapping;
+    hallFloorBump.wrapT = C_ENGINE.RepeatWrapping;
+    hallFloorBump.repeat.set(8, 7);
+
+    const hallFloorMat = new C_ENGINE.MeshStandardMaterial({
+      map: hallFloorTex,
+      bumpMap: hallFloorBump,
+      bumpScale: 0.028,
+      roughness: 0.91,
+      metalness: 0.0,
+      envMapIntensity: 0.12
+    });
+    const hallFloorMesh = new C_ENGINE.Mesh(
+      new C_ENGINE.BoxGeometry(27.8, 0.14, hallDepth),
+      hallFloorMat
+    );
+    hallFloorMesh.position.set(0, intFloorY - 0.07, midZ);
+    hallFloorMesh.receiveShadow = true;
+    sanctGroup.add(hallFloorMesh);
+
+    // 천장 4면 패널 (기존 대비 약 30% 상향된 중앙 8.95m 연등천장 + 중앙 6.6m × 6.6m 천창 우물 개구부)
+    const skyHalf = 3.3;
+    const outerCeilY = 7.45;
+    const centerCeilY = 8.95;
+    const sideCeilW = (27.8 - skyHalf * 2) * 0.5;
+    const slopeAngle = Math.atan2(centerCeilY - outerCeilY, sideCeilW);
+    const slopedLen = Math.hypot(sideCeilW, centerCeilY - outerCeilY);
+
+    for (const xSign of [-1, 1]) {
+      const ceilGeo = new C_ENGINE.PlaneGeometry(slopedLen + 0.2, hallDepth + 0.2);
+      ceilGeo.rotateX(Math.PI / 2);
+      const cPanel = new C_ENGINE.Mesh(ceilGeo, darkSanctuaryMat);
+      // 좌·우 경사 천장이 서까래(ceilRafterInst)와 동일한 Z축 경사각(-/+slopeAngle)으로 밀착되도록 수정
+      cPanel.rotation.z = xSign > 0 ? -slopeAngle : slopeAngle;
+      cPanel.position.set(
+        xSign * (skyHalf + sideCeilW * 0.5),
+        (outerCeilY + centerCeilY) * 0.5,
+        midZ
+      );
+      sanctGroup.add(cPanel);
+    }
+    const fbCeilD = (hallDepth - skyHalf * 2) * 0.5;
+    for (const zSign of [-1, 1]) {
+      const cPanel = new C_ENGINE.Mesh(
+        new C_ENGINE.PlaneGeometry(skyHalf * 2 + 0.04, fbCeilD),
+        darkSanctuaryMat
+      );
+      cPanel.rotation.x = Math.PI / 2;
+      cPanel.position.set(0, centerCeilY + 0.02, midZ + zSign * (skyHalf + fbCeilD * 0.5));
+      sanctGroup.add(cPanel);
+    }
+
+    // 천장 노출 대들보(천창 좌·우 굵은 원목 대들보 2주 + 외곽 보 2주 — 서까래·가로보와 완전 비간섭 배치)
+    for (const bx of [-10.8, -3.45, 3.45, 10.8]) {
+      const isMain = Math.abs(bx) < 5;
+      const beamY = isMain ? centerCeilY - 0.40 : outerCeilY + 0.02;
+      m.createMesh(
+        new C_ENGINE.CylinderGeometry(isMain ? 0.32 : 0.22, isMain ? 0.34 : 0.24, hallDepth - 0.5, 14),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [bx, beamY, midZ], rot: [Math.PI * 0.5, 0, 0], castShadow: false, tone: 0.58 }
+      );
+    }
+    for (const bz of [midZ - 3.45, midZ + 3.45]) {
+      m.createMesh(
+        new C_ENGINE.RoundedBoxGeometry(skyHalf * 2 - 0.12, 0.34, 0.34, 2, 0.03),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [0, centerCeilY - 0.22, bz], castShadow: false, tone: 0.60 }
+      );
+    }
+
+    // 좌·우 경사 천장 평행 서까래 띠 (중앙 천창을 향해 자연스럽게 솟아오름, InstancedMesh 1 Draw Call)
+    const ceilRafterRows = 26;
+    const sideRafterLen = slopedLen - 0.15;
+    const ceilRafterGeo = new C_ENGINE.CylinderGeometry(0.072, 0.072, sideRafterLen, 6);
+    ceilRafterGeo.rotateZ(Math.PI * 0.5);
+    const ceilRafterInst = new C_ENGINE.InstancedMesh(ceilRafterGeo, m.matDarkTimber, ceilRafterRows * 2);
+    const rDummy = new C_ENGINE.Object3D();
+    let rIdx = 0;
+    for (let i = 0; i < ceilRafterRows; i++) {
+      const rz = fZ + 0.55 + (i / (ceilRafterRows - 1)) * (hallDepth - 1.1);
+      for (const xSign of [-1, 1]) {
+        rDummy.position.set(
+          xSign * (skyHalf + sideCeilW * 0.5),
+          (outerCeilY + centerCeilY) * 0.5 - 0.14,
+          rz
+        );
+        rDummy.rotation.set(0, 0, xSign > 0 ? -slopeAngle : slopeAngle);
+        rDummy.updateMatrix();
+        ceilRafterInst.setMatrixAt(rIdx++, rDummy.matrix);
+      }
+    }
+    ceilRafterInst.instanceMatrix.needsUpdate = true;
+    sanctGroup.add(ceilRafterInst);
+
+    // 실제 3D 입체 우물천창 — '청광사 내부 이미지.jpg'의 고색 바랜 단청 천창 텍스처 직접 투영
+    const cofferCanvas = document.createElement('canvas');
+    cofferCanvas.width = 512;
+    cofferCanvas.height = 256;
+    const cCtx = cofferCanvas.getContext('2d');
+    const cGrad = cCtx.createLinearGradient(0, 0, 0, 256);
+    cGrad.addColorStop(0, '#4a3d31');
+    cGrad.addColorStop(0.5, '#3b3229');
+    cGrad.addColorStop(1, '#2a221b');
+    cCtx.fillStyle = cGrad;
+    cCtx.fillRect(0, 0, 512, 256);
+    cCtx.fillStyle = 'rgba(84, 110, 96, 0.42)';
+    cCtx.fillRect(0, 48, 512, 34);
+    cCtx.fillStyle = 'rgba(130, 74, 62, 0.36)';
+    cCtx.fillRect(0, 108, 512, 28);
+    cCtx.fillStyle = 'rgba(84, 110, 96, 0.38)';
+    cCtx.fillRect(0, 162, 512, 34);
+
+    const cofferDancheongTex = new C_ENGINE.CanvasTexture(cofferCanvas);
+    cofferDancheongTex.colorSpace = C_ENGINE.SRGBColorSpace;
+    try {
+      const refCo = new Image();
+      refCo.crossOrigin = 'anonymous';
+      refCo.onload = () => {
+        const iw = refCo.naturalWidth || refCo.width;
+        const ih = refCo.naturalHeight || refCo.height;
+        if (!iw || !ih) return;
+        cCtx.clearRect(0, 0, 512, 256);
+        cCtx.drawImage(refCo, iw * 0.41, ih * 0.045, iw * 0.18, ih * 0.13, 0, 0, 512, 256);
+        cofferDancheongTex.needsUpdate = true;
+      };
+      refCo.src = encodeURI('청광사 내부 이미지.jpg');
+    } catch {
+      // 폴백 유지
+    }
+
+    const cofferWallMat = new C_ENGINE.MeshStandardMaterial({
+      map: cofferDancheongTex,
+      emissive: new C_ENGINE.Color(0x524432),
+      emissiveMap: cofferDancheongTex,
+      emissiveIntensity: 0.32,
+      roughness: 0.86
+    });
+
+    const cofferH = 1.65;
+    const cofferCenterY = centerCeilY + cofferH * 0.5;
+    for (const zSign of [-1, 1]) {
+      const cw = new C_ENGINE.Mesh(new C_ENGINE.PlaneGeometry(skyHalf * 2, cofferH), cofferWallMat);
+      cw.position.set(0, cofferCenterY, midZ + zSign * skyHalf);
+      cw.rotation.y = zSign > 0 ? Math.PI : 0;
+      sanctGroup.add(cw);
+    }
+    for (const xSign of [-1, 1]) {
+      const cw = new C_ENGINE.Mesh(new C_ENGINE.PlaneGeometry(skyHalf * 2, cofferH), cofferWallMat);
+      cw.position.set(xSign * skyHalf, cofferCenterY, midZ);
+      cw.rotation.y = xSign > 0 ? -Math.PI / 2 : Math.PI / 2;
+      sanctGroup.add(cw);
+    }
+    const cofferTopY = centerCeilY + cofferH;
+    // 천창 우물반자 가로·세로 살대 Y 높이 분리(교차점 Z-fighting 0%)
+    for (const offset of [-1.65, 0, 1.65]) {
+      m.createMesh(
+        new C_ENGINE.BoxGeometry(skyHalf * 2 - 0.06, 0.14, 0.16),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [0, cofferTopY - 0.15, midZ + offset], castShadow: false, tone: 0.62 }
+      );
+      m.createMesh(
+        new C_ENGINE.BoxGeometry(0.16, 0.14, skyHalf * 2 - 0.06),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [offset, cofferTopY - 0.23, midZ], castShadow: false, tone: 0.62 }
+      );
+    }
+    const skylightTopMat = new C_ENGINE.MeshBasicMaterial({
+      color: 0xfff0d0,
+      transparent: true,
+      opacity: 0.86
+    });
+    const skylightTop = new C_ENGINE.Mesh(new C_ENGINE.PlaneGeometry(skyHalf * 2, skyHalf * 2), skylightTopMat);
+    skylightTop.rotation.x = Math.PI / 2;
+    skylightTop.position.set(0, cofferTopY - 0.02, midZ);
+    sanctGroup.add(skylightTop);
+
+    // 좌·우 내벽 및 천장-벽면 전통 결구부 (창방 · 평방 · 주심도리 · 기둥 상부 공포 포작)
+    const intPlasterMat = new C_ENGINE.MeshStandardMaterial({
+      color: 0x9b9589,
+      roughness: 0.94,
+      metalness: 0.01
+    });
+    const sideWallH = outerCeilY - intFloorY + 0.15;
+    const sideWallCenterY = intFloorY + sideWallH * 0.5;
+    for (const sx of [-13.82, 13.82]) {
+      const sWall = new C_ENGINE.Mesh(new C_ENGINE.PlaneGeometry(hallDepth, sideWallH), intPlasterMat);
+      sWall.rotation.y = sx < 0 ? Math.PI / 2 : -Math.PI / 2;
+      sWall.position.set(sx, sideWallCenterY, midZ);
+      sanctGroup.add(sWall);
+      const inward = sx < 0 ? 1 : -1;
+      // 회벽(sx) 앞쪽으로 완전히 이격해 모든 벽면 목재가 회벽과 Z-fighting 없이 입체 돌출
+      const barX = sx + inward * 0.09;
+      const colX = sx + inward * 0.13;
+
+      // 하부 걸레받이 · 중인방 · 상인방 (측면 양 끝 0.70m 여유 확보)
+      const sideTrimLen = hallDepth - 0.70;
+      for (const barY of [0.85, 2.75, 4.95, outerCeilY - 0.76]) {
         m.createMesh(
-          new C_ENGINE.CylinderGeometry(0.30, 0.34, 5.0, 16),
+          new C_ENGINE.BoxGeometry(0.14, barY === 0.85 ? 1.1 : 0.18, sideTrimLen),
           m.matDarkTimber,
           sanctGroup,
-          { pos: [gx, 2.90, gz], castShadow: false, tone: 0.78 }
+          { pos: [barX, barY, midZ], castShadow: false, tone: 0.60 }
+        );
+      }
+      // 천장-벽면 경계 주심도리 및 고색 단청 반자띠 (세 부재 높이·깊이 완전 분리)
+      m.createMesh(
+        new C_ENGINE.CylinderGeometry(0.16, 0.16, sideTrimLen, 10),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [sx + inward * 0.28, outerCeilY - 0.22, midZ], rot: [Math.PI * 0.5, 0, 0], castShadow: false, tone: 0.55 }
+      );
+      m.createMesh(
+        new C_ENGINE.BoxGeometry(0.14, 0.18, sideTrimLen),
+        m.matDancheongJade,
+        sanctGroup,
+        { pos: [sx + inward * 0.11, outerCeilY - 0.50, midZ], castShadow: false, tone: 0.52 }
+      );
+
+      // 수직 내벽 기둥 및 천장 결구 공포(주두 · 첨차 · 소로 모두 서로 다른 높이·돌출량으로 Z-fighting 0%)
+      for (const pz of sideZs) {
+        if (Math.abs(pz - fZ) < 0.25 || Math.abs(pz - rZ) < 0.25) continue;
+        m.createMesh(
+          new C_ENGINE.BoxGeometry(0.22, sideWallH - 0.2, 0.26),
+          m.matDarkTimber,
+          sanctGroup,
+          { pos: [colX, sideWallCenterY - 0.08, pz], castShadow: false, tone: 0.62 }
+        );
+        // 기둥 머리 주두 (반자띠보다 안쪽으로 뚜렷하게 돌출)
+        m.createMesh(
+          new C_ENGINE.RoundedBoxGeometry(0.42, 0.24, 0.42, 2, 0.015),
+          m.matDancheongJade,
+          sanctGroup,
+          { pos: [sx + inward * 0.25, outerCeilY - 0.50, pz], castShadow: false, tone: 0.58 }
+        );
+        // 상부 첨차 (주두 위, 별도 높이)
+        m.createMesh(
+          new C_ENGINE.RoundedBoxGeometry(0.64, 0.14, 0.22, 2, 0.015),
+          m.matDancheongRed,
+          sanctGroup,
+          { pos: [sx + inward * 0.36, outerCeilY - 0.30, pz], castShadow: false, tone: 0.58 }
+        );
+        // 교차 소로 (첨차 아래로 0.05m 분리해 상·하면 공면 0%)
+        m.createMesh(
+          new C_ENGINE.RoundedBoxGeometry(0.28, 0.10, 0.68, 2, 0.015),
+          m.matDarkTimber,
+          sanctGroup,
+          { pos: [sx + inward * 0.24, outerCeilY - 0.17, pz], castShadow: false, tone: 0.60 }
         );
       }
     }
 
-    // 내진 후불벽 실사 이미지 ('assets/altar-wall-calm-20261102.jpg') 및 수미단 불단
-    const altarWallMat = new C_ENGINE.MeshStandardMaterial({
-      color: 0xc99c68,
-      emissive: new C_ENGINE.Color(0xffb866),
-      emissiveIntensity: 0.22,
-      roughness: 0.78,
-      metalness: 0.04
-    });
-    const texLoader = new C_ENGINE.TextureLoader();
-    texLoader.load(
-      'assets/altar-wall-calm-20261102.jpg',
-      (tex) => {
-        tex.colorSpace = C_ENGINE.SRGBColorSpace;
-        altarWallMat.map = tex;
-        altarWallMat.emissiveMap = tex;
-        altarWallMat.color.setHex(0xffffff);
-        altarWallMat.needsUpdate = true;
-      },
-      undefined,
-      () => {}
+    // 후면 벽체 및 후면 상단 천장-벽면 결구(창방 + 주심도리 + 공포)
+    const backWallH = centerCeilY - intFloorY + 0.2;
+    const sanctBackBacking = new C_ENGINE.Mesh(
+      new C_ENGINE.PlaneGeometry(27.8, backWallH),
+      darkSanctuaryMat
     );
-    const altarMuralMesh = new C_ENGINE.Mesh(
-      new C_ENGINE.PlaneGeometry(13.6, 4.15),
-      altarWallMat
-    );
-    altarMuralMesh.rotation.y = Math.PI;
-    altarMuralMesh.position.set(0, 2.82, 11.18);
-    sanctGroup.add(altarMuralMesh);
+    sanctBackBacking.rotation.y = Math.PI;
+    sanctBackBacking.position.set(0, intFloorY + backWallH * 0.5, rZ - 0.16);
+    sanctGroup.add(sanctBackBacking);
 
-    // 수미단(조각 불단) + 청동 향로·촛대 + 서쪽 동향 소조아미타여래좌상 광배 실루엣
     m.createMesh(
-      new C_ENGINE.RoundedBoxGeometry(7.2, 0.88, 1.35, 2, 0.04),
+      new C_ENGINE.BoxGeometry(27.0, 0.32, 0.30),
       m.matDarkTimber,
       sanctGroup,
-      { pos: [0, 0.86, 10.32], castShadow: false, tone: 0.82 }
+      { pos: [0, outerCeilY - 0.38, rZ - 0.30], castShadow: false, tone: 0.58 }
     );
-    m.createMesh(
-      new C_ENGINE.RoundedBoxGeometry(7.45, 0.14, 1.52, 2, 0.025),
-      m.matDancheongRed,
-      sanctGroup,
-      { pos: [0, 1.34, 10.32], castShadow: false }
+
+    // 전면 출입문 상부 실내 회벽 및 목조 인방 마감 (y = 4.02 ~ 천장 8.95 빈 공간 밀폐)
+    // 외부 화반(최대 fZ+0.05)과 공포 첨차 내측면(fZ+0.14) 사이의 안전 구간 fZ + 0.11에 배치해 모든 부재와 Z-fighting 완전 제거
+    const frontUpperH = centerCeilY - 4.02 + 0.15;
+    const frontUpperWall = new C_ENGINE.Mesh(
+      new C_ENGINE.PlaneGeometry(27.6, frontUpperH),
+      intPlasterMat
     );
-    const censerMesh = new C_ENGINE.Mesh(
-      new C_ENGINE.CylinderGeometry(0.18, 0.14, 0.26, 14),
-      m.matBronze
-    );
-    censerMesh.position.set(0, 1.54, 9.92);
-    sanctGroup.add(censerMesh);
-    for (const candleX of [-1.45, 1.45]) {
-      const flame = new C_ENGINE.Mesh(
-        new C_ENGINE.SphereGeometry(0.065, 10, 10),
-        m.matWarmHanji
+    frontUpperWall.position.set(0, 4.02 + frontUpperH * 0.5, fZ + 0.11);
+    sanctGroup.add(frontUpperWall);
+    for (const fBarY of [4.16, 5.65, outerCeilY - 0.42]) {
+      m.createMesh(
+        new C_ENGINE.BoxGeometry(27.0, 0.22, 0.18),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [0, fBarY, fZ + 0.29], castShadow: false, tone: 0.60 }
       );
-      flame.position.set(candleX, 1.66, 9.95);
-      sanctGroup.add(flame);
     }
 
-    // 서쪽(좌측 내진) 동향 아미타여래좌상 금빛 광배 및 좌대
-    const westHalo = new C_ENGINE.Mesh(
-      new C_ENGINE.CylinderGeometry(0.95, 0.82, 0.08, 20),
-      m.matBronze
-    );
-    westHalo.rotation.z = Math.PI / 2;
-    westHalo.position.set(-8.15, 2.35, 9.25);
-    sanctGroup.add(westHalo);
-    const westBuddhaBody = new C_ENGINE.Mesh(
-      new C_ENGINE.ConeGeometry(0.52, 1.28, 16),
-      m.matBronze
-    );
-    westBuddhaBody.position.set(-7.88, 2.02, 9.25);
-    sanctGroup.add(westBuddhaBody);
-    const westBuddhaHead = new C_ENGINE.Mesh(
-      new C_ENGINE.SphereGeometry(0.24, 14, 14),
-      m.matBronze
-    );
-    westBuddhaHead.position.set(-7.88, 2.76, 9.25);
-    sanctGroup.add(westBuddhaHead);
+    // 내부 고주(高柱) 4주 및 상부 공포 결구
+    const innerColH = outerCeilY + 0.42 - intFloorY;
+    for (const [gx, gz] of hallInt.innerColumns) {
+      m.createMesh(
+        new C_ENGINE.CylinderGeometry(0.30, 0.34, innerColH, 16),
+        m.matDarkTimber,
+        sanctGroup,
+        { pos: [gx, intFloorY + innerColH * 0.5, gz], castShadow: false, tone: 0.65 }
+      );
+      m.createMesh(
+        new C_ENGINE.RoundedBoxGeometry(0.74, 0.22, 0.74, 2, 0.02),
+        m.matDancheongJade,
+        sanctGroup,
+        { pos: [gx, outerCeilY + 0.18, gz], castShadow: false, tone: 0.58 }
+      );
+      m.createMesh(
+        new C_ENGINE.RoundedBoxGeometry(1.12, 0.18, 0.36, 2, 0.02),
+        m.matDancheongRed,
+        sanctGroup,
+        { pos: [gx, outerCeilY + 0.36, gz], castShadow: false, tone: 0.58 }
+      );
+    }
 
-    // 법당 내부 은은한 성소 조명
-    const sanctuaryLight = new C_ENGINE.PointLight(0xffb85e, 1.05, 10.5, 1.6);
-    sanctuaryLight.position.set(0, 3.05, 9.25);
-    sanctGroup.add(sanctuaryLight);
+    // 청풍사 대형 내부 현대 선(禪) 아트 공간 — 「청풍수경(淸風水鏡) · 먹빛 차경」
+    this.interiorBuilder.build(sanctGroup, intFloorY);
 
     hg.add(sanctGroup);
 
@@ -690,12 +994,12 @@ export class BuseoksaBuilder {
       // 상부 황토 포벽 (y: 4.10 -> 5.56) 및 화반 동자주
       buildOchreUpperWall(bayClearW, 1.48, [bayCenter, 4.83, fZ + 0.06], Math.PI);
       if (b !== 2) {
-        // 좌우 칸 포벽 중앙 화반(花盤) 받침 (어칸 중앙은 현판 자리)
+        // 좌우 칸 포벽 중앙 화반(花盤) 받침 (외부 장식 부재: 실내 회벽 fZ+0.11과 6cm 이격)
         m.createMesh(
           new C_ENGINE.RoundedBoxGeometry(0.38, 0.56, 0.22, 2, 0.02),
           m.matTimber,
           hg,
-          { pos: [bayCenter, 5.22, fZ - 0.02], tone: 0.94 }
+          { pos: [bayCenter, 5.22, fZ - 0.06], tone: 0.94 }
         );
       }
 
@@ -707,38 +1011,38 @@ export class BuseoksaBuilder {
         const shutterW = Math.min(1.06, sideSpan * 0.62);
         const outerLatticeW = Math.max(0.32, sideSpan - shutterW);
 
-        // 출입구 좌·우 문설주(문선 기둥)
+        // 출입구 좌·우 문설주(문선 기둥) — 바닥 문턱(0.26)부터 상인방(3.98)까지 빈 공간 없이 밀착
         for (const sSign of [-1, 1]) {
           const jambX = bayCenter + sSign * (openW * 0.5 + 0.06);
           m.createMesh(
-            new C_ENGINE.RoundedBoxGeometry(0.13, 3.36, 0.26, 2, 0.015),
+            new C_ENGINE.RoundedBoxGeometry(0.13, 3.74, 0.26, 2, 0.015),
             m.matDarkTimber,
             hg,
-            { pos: [jambX, 2.24, fZ], tone: 0.90 }
+            { pos: [jambX, 2.13, fZ], tone: 0.90 }
           );
 
-          // 열린 출입구 양옆으로 젖혀 고정된 흰색 한지 사분합 덧문 ('무량수전.jpg' 핵심 시각 포인트)
+          // 열린 출입구 양옆으로 젖혀 고정된 흰색 한지 사분합 덧문 (바닥 문턱까지 빈틈없이 연장)
           const shutCenterX = bayCenter + sSign * (openW * 0.5 + 0.12 + shutterW * 0.5);
           m.createMesh(
-            new C_ENGINE.BoxGeometry(shutterW, 3.32, 0.055),
+            new C_ENGINE.BoxGeometry(shutterW, 3.70, 0.055),
             whiteShutterMat,
             hg,
             {
-              pos: [shutCenterX, 2.24, fZ - 0.10],
+              pos: [shutCenterX, 2.13, fZ - 0.10],
               preserveUvs: true,
               tone: 1.0
             }
           );
 
-          // 기둥 쪽 외곽 정자살 분합문 + 하부 궁판 벽체
+          // 기둥 쪽 외곽 정자살 분합문 + 하부 궁판 벽체 (바닥 문턱까지 빈틈없이 연장)
           const latCenterX =
             bayCenter + sSign * (openW * 0.5 + 0.12 + shutterW + outerLatticeW * 0.5);
           m.createMesh(
-            new C_ENGINE.BoxGeometry(outerLatticeW, 3.32, 0.08),
+            new C_ENGINE.BoxGeometry(outerLatticeW, 3.70, 0.08),
             latticeDoorMat,
             hg,
             {
-              pos: [latCenterX, 2.24, fZ + 0.03],
+              pos: [latCenterX, 2.13, fZ + 0.03],
               preserveUvs: true,
               tone: 0.96
             }
@@ -792,8 +1096,8 @@ export class BuseoksaBuilder {
       }
     }
 
-    // 6. '淸 風 寺' (청풍사) 본전 전통 가로 대편액 현판 (단일 Group 일체화로 뒤판 간섭·처마 가림 원천 차단)
-    const plaqueTex = TextureFactory.createMainHallPlaqueTexture(cfg.hanja || '淸 風 寺', {
+    // 6. '淸 風 明 月' (청풍명월) 본전 전통 가로 대편액 현판 (단일 Group 일체화로 뒤판 간섭·처마 가림 원천 차단)
+    const plaqueTex = TextureFactory.createMainHallPlaqueTexture(cfg.hanja || '淸 風 明 月', {
       rtl: true
     });
     const plaqueGroup = new C_ENGINE.Group();
@@ -944,7 +1248,9 @@ export class BuseoksaBuilder {
           { pos: [sx - sideSign * 0.08, beamY, midZ], tone: 0.90 }
         );
       }
-      for (const postZ of [7.15, 8.7, 10.3, 11.9, 13.45]) {
+      const sidePostCount = Math.max(5, sideZs.length);
+      for (let pi = 0; pi < sidePostCount; pi++) {
+        const postZ = fZ + 0.15 + (pi / (sidePostCount - 1)) * (totalSpanZ - 0.3);
         m.createMesh(
           new C_ENGINE.RoundedBoxGeometry(0.24, 2.08, 0.20, 2, 0.02),
           m.matTimber,
@@ -1057,8 +1363,9 @@ export class BuseoksaBuilder {
     }
 
     // 9. 4면 겹처마(연목 + 부연 + 마구리) + 4귀 추녀·사래 + 실사 팔작지붕
-    const roofSpec = cfg.roof; // { x: 0, z: 10.3, baseY: 6.12, width: 38.2, depth: 14.8, ... }
+    const roofSpec = cfg.roof;
     const roofZ = roofSpec.z;
+    const roofHalfD = roofSpec.depth * 0.5;
     const eaveBaseY = roofSpec.baseY; // 6.12
 
     // 전·후면(zSign = -1 전면, +1 후면) 겹처마 서까래 56열 × 2면
@@ -1071,18 +1378,18 @@ export class BuseoksaBuilder {
       const anheori = Math.pow(absU, 2.2) * 0.42;
 
       for (const zSign of [-1, 1]) {
-        // 원형 연목(서까래) 곡선
+        // 원형 연목(서까래) 곡선 (외벽선 fZ/rZ 바깥에서만 시작해 실내 천장 관통 방지)
         const rCurve = new C_ENGINE.CatmullRomCurve3([
-          new C_ENGINE.Vector3(rx * 0.95, eaveBaseY + 0.88 + cornerLift * 0.30, roofZ + zSign * 3.05),
+          new C_ENGINE.Vector3(rx * 0.95, eaveBaseY + 0.84 + cornerLift * 0.30, roofZ + zSign * (roofHalfD - 3.25)),
           new C_ENGINE.Vector3(
             rx * 0.985,
             eaveBaseY + 0.36 + cornerLift * 0.68,
-            roofZ + zSign * (4.85 + anheori * 0.5)
+            roofZ + zSign * (roofHalfD - 2.55 + anheori * 0.5)
           ),
           new C_ENGINE.Vector3(
             rx * 1.015,
             eaveBaseY - 0.02 + cornerLift,
-            roofZ + zSign * (6.38 + anheori * 0.85)
+            roofZ + zSign * (roofHalfD - 1.02 + anheori * 0.85)
           )
         ]);
         m.createMesh(
@@ -1100,7 +1407,7 @@ export class BuseoksaBuilder {
             pos: [
               rx * 1.016,
               eaveBaseY - 0.03 + cornerLift,
-              roofZ + zSign * (6.40 + anheori * 0.85)
+              roofZ + zSign * (roofHalfD - 1.0 + anheori * 0.85)
             ],
             rot: [Math.PI * 0.5 + zSign * 0.18, 0, 0],
             castShadow: false
@@ -1116,7 +1423,7 @@ export class BuseoksaBuilder {
             pos: [
               rx * 1.03,
               eaveBaseY + 0.05 + cornerLift * 1.08,
-              roofZ + zSign * (6.86 + anheori)
+              roofZ + zSign * (roofHalfD - 0.54 + anheori)
             ],
             rot: [zSign * 0.16, 0, 0],
             castShadow: false,
@@ -1131,7 +1438,7 @@ export class BuseoksaBuilder {
             pos: [
               rx * 1.032,
               eaveBaseY - 0.03 + cornerLift * 1.08,
-              roofZ + zSign * (7.38 + anheori)
+              roofZ + zSign * (roofHalfD - 0.02 + anheori)
             ],
             rot: [zSign * 0.16, 0, 0],
             castShadow: false
@@ -1140,12 +1447,13 @@ export class BuseoksaBuilder {
       }
     }
 
-    // 좌·우 측면(xSign = -1 좌측, +1 우측) 팔작 날개 처마 서까래 22열 × 2면
-    const sideRafterCount = 22;
+    // 좌·우 측면(xSign = -1 좌측, +1 우측) 팔작 날개 처마 서까래 (깊이에 맞춰 동적 확장)
+    const sideRafterCount = 34;
+    const sideRafterHalfZ = roofHalfD - 0.85;
     for (let i = 0; i < sideRafterCount; i++) {
       const w = (i / (sideRafterCount - 1)) * 2 - 1;
       const absW = Math.abs(w);
-      const rz = roofZ + w * 6.55;
+      const rz = roofZ + w * sideRafterHalfZ;
       const cornerLift = Math.pow(absW, 2.4) * 0.72;
       const anheoriX = Math.pow(absW, 2.0) * 0.35;
 
@@ -1427,10 +1735,8 @@ export class BuseoksaBuilder {
       tone: 0.92
     });
 
-    // 아침·낮 산사 기준 석등 점광원 강도 (1.6)
-    this.stoneLanternLight = new C_ENGINE.PointLight(0xffaa44, 1.6, 14, 1.6);
-    this.stoneLanternLight.position.set(0, 2.15, 0);
-    lg.add(this.stoneLanternLight);
+    // 석등 화사창 자체 발광(matWarmHanji) + 바닥 글로우(groundGlow)로 표현 (PointLight 절감)
+    this.stoneLanternLight = null;
 
     const groundGlowMat = new C_ENGINE.MeshBasicMaterial({
       map: m.glowTex,
@@ -1720,36 +2026,145 @@ export class BuseoksaBuilder {
 
     buildRealisticPaljakRoof(pg, spec.roof, m);
 
-    // 6. 안양루 14개 전통 비단 명상 방석 (ANYANGRU_CONFIG.cushionLocalCoords 단일 원본 공유)
+    // 6. 차경루 21개 단일 디자인 미니멀 명상 좌복 (단정한 린넨 방석 + 소박한 돗자리 자리)
+    this.cushionInteractiveEntries = [];
+    const cushionHitGeo = new C_ENGINE.CylinderGeometry(0.66, 0.66, 0.34, 16);
+    const cushionHitMat = new C_ENGINE.MeshBasicMaterial({ visible: false });
+    const cushionRingGeo = new C_ENGINE.RingGeometry(0.50, 0.58, 36);
+
+    // 소박한 베이지 돗자리 텍스처 (단일 통일 디자인)
+    const makeSimpleMatTex = () => {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#c9bfa8';
+      ctx.fillRect(0, 0, 128, 128);
+      for (let y = 0; y < 128; y += 3) {
+        ctx.fillStyle = y % 6 === 0 ? 'rgba(130,115,92,0.16)' : 'rgba(240,232,214,0.14)';
+        ctx.fillRect(0, y, 128, 1.5);
+      }
+      ctx.strokeStyle = '#474f4d';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(4, 4, 120, 120);
+      const tex = new C_ENGINE.CanvasTexture(c);
+      tex.colorSpace = C_ENGINE.SRGBColorSpace;
+      return tex;
+    };
+
+    // 차분한 먹청·회빛 천연 린넨 좌복 텍스처 (단일 통일 디자인)
+    const makeSimpleLinenTex = () => {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 128;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 64);
+      g.addColorStop(0, '#4d5b59');
+      g.addColorStop(0.75, '#3b4746');
+      g.addColorStop(1, '#2b3433');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 128; i += 3) {
+        ctx.beginPath();
+        ctx.moveTo(0, i);
+        ctx.lineTo(128, i);
+        ctx.stroke();
+      }
+      const tex = new C_ENGINE.CanvasTexture(c);
+      tex.colorSpace = C_ENGINE.SRGBColorSpace;
+      return tex;
+    };
+
+    const simpleMatMaterial = new C_ENGINE.MeshStandardMaterial({
+      map: makeSimpleMatTex(),
+      roughness: 0.9,
+      metalness: 0.01
+    });
+    const simpleCushionMat = new C_ENGINE.MeshStandardMaterial({
+      map: makeSimpleLinenTex(),
+      roughness: 0.88,
+      metalness: 0.02
+    });
+    const simpleDimpleMat = new C_ENGINE.MeshStandardMaterial({
+      color: 0x2a3332,
+      roughness: 0.92,
+      metalness: 0.01
+    });
+
+    // 간결하고 단아한 원형 명상 방석 프로필
+    const puffPts = [
+      new C_ENGINE.Vector2(0.0, 0.0),
+      new C_ENGINE.Vector2(0.41, 0.004),
+      new C_ENGINE.Vector2(0.455, 0.035),
+      new C_ENGINE.Vector2(0.46, 0.082),
+      new C_ENGINE.Vector2(0.42, 0.12),
+      new C_ENGINE.Vector2(0.30, 0.134),
+      new C_ENGINE.Vector2(0.12, 0.128),
+      new C_ENGINE.Vector2(0.0, 0.118)
+    ];
+    const puffGeo = new C_ENGINE.LatheGeometry(puffPts, 28);
+    const matBaseGeo = new C_ENGINE.RoundedBoxGeometry(1.04, 0.02, 1.04, 2, 0.01);
+    const buttonGeo = new C_ENGINE.SphereGeometry(0.038, 10, 6);
+
     spec.cushionLocalCoords.forEach(([cx, cz], idx) => {
       const cushionGroup = new C_ENGINE.Group();
       cushionGroup.position.set(cx, deckY + 0.06, cz);
 
-      m.createMesh(
-        new C_ENGINE.RoundedBoxGeometry(1.16, 0.03, 1.16, 2, 0.01),
-        m.matPaleTimber,
-        cushionGroup,
-        { pos: [0, 0.015, 0], tone: 1.04 + (idx % 3) * 0.02 }
-      );
-      m.createMesh(
-        new C_ENGINE.CylinderGeometry(0.44, 0.48, 0.13, 28),
-        idx % 2 === 0 ? m.matDancheongRed : m.matDancheongJade,
-        cushionGroup,
-        { pos: [0, 0.075, 0], tone: 1.04 }
-      );
-      m.createMesh(
-        new C_ENGINE.CylinderGeometry(0.28, 0.30, 0.14, 24),
-        m.matWarmHanji,
-        cushionGroup,
-        { pos: [0, 0.082, 0] }
-      );
+      const matMesh = new C_ENGINE.Mesh(matBaseGeo, simpleMatMaterial);
+      matMesh.position.set(0, 0.01, 0);
+      matMesh.receiveShadow = true;
+      matMesh.castShadow = true;
+      cushionGroup.add(matMesh);
+
+      const silkMesh = new C_ENGINE.Mesh(puffGeo, simpleCushionMat);
+      silkMesh.position.set(0, 0.018, 0);
+      silkMesh.castShadow = true;
+      silkMesh.receiveShadow = true;
+      cushionGroup.add(silkMesh);
+
+      const topPadMesh = new C_ENGINE.Mesh(buttonGeo, simpleDimpleMat);
+      topPadMesh.position.set(0, 0.135, 0);
+      topPadMesh.scale.set(1.1, 0.35, 1.1);
+      cushionGroup.add(topPadMesh);
+
+      const cushionData = { type: 'cushion', seatIndex: idx };
+      matMesh.userData = cushionData;
+      silkMesh.userData = cushionData;
+      topPadMesh.userData = cushionData;
+
+      const hitMesh = new C_ENGINE.Mesh(cushionHitGeo, cushionHitMat);
+      hitMesh.position.set(0, 0.14, 0);
+      hitMesh.userData = cushionData;
+      cushionGroup.add(hitMesh);
+
+      const ringMat = new C_ENGINE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        side: C_ENGINE.DoubleSide,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false
+      });
+      const ringMesh = new C_ENGINE.Mesh(cushionRingGeo, ringMat);
+      ringMesh.rotation.x = -Math.PI * 0.5;
+      ringMesh.position.set(0, 0.032, 0);
+      ringMesh.visible = false;
+      ringMesh.raycast = () => {};
+      cushionGroup.add(ringMesh);
+
+      this.cushionInteractiveEntries.push({
+        seatIndex: idx,
+        group: cushionGroup,
+        hitMesh,
+        ringMesh,
+        ringMat
+      });
+
       pg.add(cushionGroup);
     });
 
-    const anyangLight = new C_ENGINE.PointLight(0xffb86c, 1.8, 18, 1.5);
-    anyangLight.position.set(0, deckY + 4.6, 0);
-    pg.add(anyangLight);
-
+    // 차경루 처마 빛은 SceneManager의 eaveFillLight와 연등 자체 발광으로 통합 (PointLight 절감)
     parent.add(pg);
   }
 
@@ -1784,7 +2199,7 @@ export class BuseoksaBuilder {
     const vistaSegY = 32;
     const vistaGeo = new C_ENGINE.PlaneGeometry(1, 1, vistaSegX, vistaSegY);
     const vPos = vistaGeo.getAttribute('position');
-    const arcSpan = Math.PI * 0.78;
+    const arcSpan = Math.PI * 0.94;
     const radius = 145;
     const centerZ = -4.0;
 
@@ -1794,7 +2209,7 @@ export class BuseoksaBuilder {
       const angle = (u - 0.5) * arcSpan;
       const wx = Math.sin(angle) * radius;
       const wz = centerZ - Math.cos(angle) * radius;
-      const wy = -18.0 + v * 74.0;
+      const wy = -18.0 + v * 84.0;
       vPos.setXYZ(i, wx, wy, wz);
     }
     vistaGeo.computeVertexNormals();
@@ -1854,13 +2269,22 @@ export class BuseoksaBuilder {
   loadAndPopulatePines() {
     if (!C_ENGINE.GLTFLoader || !C_ENGINE.MeshoptDecoder) return;
 
-    const loader = new C_ENGINE.GLTFLoader().setMeshoptDecoder(C_ENGINE.MeshoptDecoder);
-    loader
-      .loadAsync('assets/models/pine.glb')
-      .then((gltf) => {
-        this.populateScannedPines(gltf);
-      })
-      .catch((err) => console.warn('Pine GLB fallback:', err));
+    // 첫 프레임 렌더링을 먼저 완료한 뒤 대용량 pine.glb를 비동기 로드하여 초기 체감 로딩 속도 개선
+    const startLoad = () => {
+      const loader = new C_ENGINE.GLTFLoader().setMeshoptDecoder(C_ENGINE.MeshoptDecoder);
+      loader
+        .loadAsync('assets/models/pine.glb')
+        .then((gltf) => {
+          this.populateScannedPines(gltf);
+        })
+        .catch((err) => console.warn('Pine GLB fallback:', err));
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(startLoad, { timeout: 350 });
+    } else {
+      setTimeout(startLoad, 120);
+    }
   }
 
   populateScannedPines(gltf) {
@@ -1890,12 +2314,12 @@ export class BuseoksaBuilder {
 
       clone.traverse((child) => {
         if (child.isMesh) {
-          child.castShadow = !isMobile;
-          child.receiveShadow = !isMobile;
           const mats = Array.isArray(child.material) ? child.material : [child.material];
+          let isTwigMesh = false;
           mats.forEach((m) => {
             if (!m) return;
             if (m.name && m.name.includes('twig')) {
+              isTwigMesh = true;
               m.alphaTest = 0.42;
               m.side = C_ENGINE.DoubleSide;
               m.roughness = 0.88;
@@ -1908,6 +2332,9 @@ export class BuseoksaBuilder {
               if (!baseBarkMat) baseBarkMat = m;
             }
           });
+          // 알파 테스트 양면 나뭇잎(twig)만 그림자 제외, 줄기 그림자는 PC·모바일 동일 적용
+          child.castShadow = !isTwigMesh;
+          child.receiveShadow = false;
         }
       });
 
@@ -1961,27 +2388,20 @@ export class BuseoksaBuilder {
 
       const primary = mainTpl.node.clone(true);
       const defaultWidth = isMaple ? 1.28 : 1.12;
-      const widthBoost = (spec.widthScale || defaultWidth) * (isMobile ? 1.16 : 1.0);
+      // 3중 복제 대신 풍성한 단일 수관 비율(1.16)로 드로우콜·폴리곤 부하 약 65% 절감
+      const widthBoost = (spec.widthScale || defaultWidth) * 1.16;
       primary.scale.set(mainScale * widthBoost, mainScale, mainScale * widthBoost);
       applyTwigMaterial(primary, chooseTwigMat(0));
-      treeGroup.add(primary);
 
-      if (spec.cluster !== false && !isMobile) {
-        const subSpecs = [
-          { dx: -0.22, dz: -0.12, hMul: 0.86, wMul: 1.15, yaw: 1.15, tiltX: 0.04, tiltZ: -0.05 },
-          { dx: 0.24, dz: -0.15, hMul: 0.91, wMul: 1.12, yaw: 2.55, tiltX: -0.03, tiltZ: 0.04 }
-        ];
-        subSpecs.forEach((sub, sIdx) => {
-          const subTpl = normalizedTemplates[(idx + sIdx + 1) % normalizedTemplates.length];
-          const subScale = (spec.height * sub.hMul) / subTpl.rawHeight;
-          const subNode = subTpl.node.clone(true);
-          subNode.scale.set(subScale * sub.wMul, subScale, subScale * sub.wMul);
-          subNode.rotation.set(sub.tiltX, sub.yaw, sub.tiltZ);
-          subNode.position.set(sub.dx * (spec.height * 0.12), 0, sub.dz * (spec.height * 0.12));
-          applyTwigMaterial(subNode, chooseTwigMat(sIdx + 1));
-          treeGroup.add(subNode);
+      // 마당 외곽·계곡 원경 나무는 그림자 패스에서 제외
+      const isDistantTree = spec.z < -24 || Math.abs(spec.x) > 22 || spec.z > 18;
+      if (isDistantTree) {
+        primary.traverse((child) => {
+          if (child.isMesh) child.castShadow = false;
         });
       }
+
+      treeGroup.add(primary);
 
       treeGroup.rotation.y = spec.yaw ?? idx * 1.7;
       treeGroup.position.set(spec.x, spec.y, spec.z);
@@ -1991,6 +2411,21 @@ export class BuseoksaBuilder {
     this.buseoksaPineAnchors.forEach((spec, idx) =>
       placePineAt(spec, idx, this.buseoksaGroup)
     );
+  }
+
+  getGardenLanternTargets() {
+    return this.wishGardenBuilder ? this.wishGardenBuilder.interactiveEntries : [];
+  }
+
+  getIndoorCushionEntries() {
+    return this.interiorBuilder ? this.interiorBuilder.indoorCushionEntries : [];
+  }
+
+  update(elapsed, dt) {
+    this.updateClouds(elapsed);
+    this.yeonhwajiBuilder?.update(elapsed, dt);
+    this.wishGardenBuilder?.update(elapsed, dt);
+    this.interiorBuilder?.update(elapsed, dt);
   }
 
   updateClouds(elapsed) {

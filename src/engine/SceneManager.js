@@ -40,21 +40,18 @@ export class SceneManager {
     const baseFov = this.getBaseFov(aspect);
     this.camera = new C_ENGINE.PerspectiveCamera(baseFov, aspect, 0.15, 520);
 
-    // 모바일 발열 및 배터리 최적화:
-    // - 고해상도 모바일 화면에서 MSAA 비활성화, 픽셀비 1.25 제한, 경량 그림자 맵(1024px) 적용
+    // PC와 모바일 동일한 화질·색감·부드러운 그림자 유지 (반응형 뷰포트는 별도 유지)
     this.renderer = new C_ENGINE.WebGLRenderer({
-      antialias: !this.isMobile,
-      powerPreference: this.isMobile ? 'default' : 'high-performance'
+      antialias: true,
+      powerPreference: 'high-performance'
     });
     this.renderer.setSize(this.width, this.height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.25 : 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.outputColorSpace = C_ENGINE.SRGBColorSpace;
     this.renderer.toneMapping = C_ENGINE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.04;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = this.isMobile
-      ? THREE_PCF_SHADOW_MAP
-      : C_ENGINE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = C_ENGINE.PCFSoftShadowMap;
     this.renderer.domElement.style.touchAction = 'none';
     this.container.appendChild(this.renderer.domElement);
 
@@ -82,7 +79,7 @@ export class SceneManager {
     this.sunLight = new C_ENGINE.DirectionalLight(0xfff0d8, 2.45);
     this.sunLight.position.set(-28, 34, -26);
     this.sunLight.castShadow = true;
-    const shadowRes = this.isMobile ? 1024 : 2048;
+    const shadowRes = 1024;
     this.sunLight.shadow.mapSize.set(shadowRes, shadowRes);
     this.sunLight.shadow.camera.near = 4;
     this.sunLight.shadow.camera.far = 140;
@@ -108,7 +105,32 @@ export class SceneManager {
     this.scene.add(this.fxRoot);
   }
 
-  loadEnvironmentPanorama(defaultUrl = 'assets/environment/woodland.jpg') {
+  createSobaeksanSkyPanorama() {
+    // mountain-vista.jpg 상단 하늘 실측 색상(#629BE1 -> #73A9E5 -> #92B6D6)과 완벽히 일치하는 360° 맑은 하늘 파노라마
+    // (기존 woodland.jpg 숲 나무가 소백산맥 하늘 위로 비쳐 보이던 현상 원천 제거)
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0.0, '#4f89d6');  // 천정 맑은 가을 하늘
+    grad.addColorStop(0.24, '#629be1'); // mountain-vista 상단 실측색
+    grad.addColorStop(0.38, '#73a9e5'); // mountain-vista 중상단 실측색
+    grad.addColorStop(0.49, '#9abbd9'); // 능선 상공 맑은 하늘
+    grad.addColorStop(0.55, '#d7e4df'); // 씬 안개(Fog) 지평선 경계
+    grad.addColorStop(0.72, '#9aa89e'); // 지평선 아래 원경 산자락 톤
+    grad.addColorStop(1.0, '#6e7a72');  // 하단
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const tex = new C_ENGINE.CanvasTexture(canvas);
+    tex.colorSpace = C_ENGINE.SRGBColorSpace;
+    tex.mapping = C_ENGINE.EquirectangularReflectionMapping;
+    return tex;
+  }
+
+  loadEnvironmentPanorama(_defaultUrl = 'assets/environment/woodland.jpg') {
     const texLoader = new C_ENGINE.TextureLoader();
 
     const applyPanoramaTexture = (url, blurriness) => {
@@ -118,12 +140,18 @@ export class SceneManager {
         this.woodlandPanorama = tex;
         this.scene.background = tex;
         this.scene.backgroundBlurriness = blurriness;
-        this.scene.backgroundIntensity = 0.88;
+        this.scene.backgroundIntensity = 0.94;
         this.horizonUpdaters.forEach((fn) => fn());
       });
     };
 
-    applyPanoramaTexture(defaultUrl, 0.014);
+    // 기본 배경을 소백산맥 맑은 하늘색 파노라마로 설정해 정면 소백산맥 사진 위로 숲 이미지가 겹치지 않도록 통일
+    const skyTex = this.createSobaeksanSkyPanorama();
+    this.woodlandPanorama = skyTex;
+    this.scene.background = skyTex;
+    this.scene.backgroundBlurriness = 0.0;
+    this.scene.backgroundIntensity = 1.0;
+    this.horizonUpdaters.forEach((fn) => fn());
 
     // 사용자 실사 사진 드래그 앤 드롭 교체 훅 유지
     window.applyCustomBuseoksaPhoto = (imageUrl) => {
@@ -178,7 +206,7 @@ export class SceneManager {
     this.camera.fov = this.getBaseFov(aspect);
     this.camera.updateProjectionMatrix();
 
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.isMobile ? 1.25 : 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setSize(this.width, this.height);
 
     for (const cb of this.resizeCallbacks) {

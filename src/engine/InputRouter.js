@@ -17,6 +17,12 @@ export class InputRouter {
     this.pointerDownTime = 0;
     this.pointerMovedDist = 0;
 
+    this.hoverRafId = null;
+    this.pendingHoverX = 0;
+    this.pendingHoverY = 0;
+    this.lastHoverRunX = -9999;
+    this.lastHoverRunY = -9999;
+
     this.bindPointerEvents();
     this.bindKeyboardEvents();
     this.bindDragAndDrop();
@@ -80,9 +86,23 @@ export class InputRouter {
         return;
       }
 
-      // 데스크톱 마우스 호버 (3D 연등·풍경종 툴팁)
-      if (e.pointerType === 'mouse') {
-        this.callbacks.onHover?.(e.clientX, e.clientY);
+      // 데스크톱 마우스 호버 (rAF 쓰로틀링으로 프레임당 최대 1회 레이캐스팅 수행)
+      if (e.pointerType === 'mouse' && this.callbacks.onHover) {
+        this.pendingHoverX = e.clientX;
+        this.pendingHoverY = e.clientY;
+        if (!this.hoverRafId) {
+          this.hoverRafId = requestAnimationFrame(() => {
+            this.hoverRafId = null;
+            if (this.isPointerDown) return;
+            const moveSq =
+              (this.pendingHoverX - this.lastHoverRunX) ** 2 +
+              (this.pendingHoverY - this.lastHoverRunY) ** 2;
+            if (moveSq < 4) return;
+            this.lastHoverRunX = this.pendingHoverX;
+            this.lastHoverRunY = this.pendingHoverY;
+            this.callbacks.onHover?.(this.pendingHoverX, this.pendingHoverY);
+          });
+        }
       }
     });
 

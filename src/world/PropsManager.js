@@ -16,13 +16,61 @@ export class PropsManager {
     this.mouseNDC = new C_ENGINE.Vector2();
 
     this.interactiveTargets = [];
+    this.gardenLanternTargets = [];
+    this.cushionEntries = [];
+    this.cushionHitMeshes = [];
+    this.seatInfoProvider = null;
+    this.hoveredSeatIndex = null;
+    this.indoorCushionEntries = [];
+    this.indoorCushionHitMeshes = [];
+    this.indoorSeatInfoProvider = null;
+    this.hoveredIndoorSeatIndex = null;
+    this.allPickTargets = [];
+    this.cachedContainerRect = null;
     this.lanternMeshes = [];
     this.sonicRings = [];
     this.hapjangParticles = [];
     this.bellExcitation = 0;
 
+    this.sceneManager.onResizeCallback(() => {
+      this.cachedContainerRect = null;
+    });
+
     this.initInteractiveWindBell();
     this.initFallingFoliage3D();
+    this.rebuildPickTargetsCache();
+  }
+
+  rebuildPickTargetsCache() {
+    this.allPickTargets = [
+      ...this.interactiveTargets,
+      ...this.cushionHitMeshes,
+      ...this.indoorCushionHitMeshes
+    ];
+  }
+
+  registerCushionTargets(entries = [], seatInfoProvider = null) {
+    this.cushionEntries = Array.isArray(entries) ? entries : [];
+    this.cushionHitMeshes = this.cushionEntries.map((e) => e.hitMesh).filter(Boolean);
+    this.seatInfoProvider = seatInfoProvider;
+    this.rebuildPickTargetsCache();
+  }
+
+  registerIndoorCushionTargets(entries = [], indoorSeatInfoProvider = null) {
+    this.indoorCushionEntries = Array.isArray(entries) ? entries : [];
+    this.indoorCushionHitMeshes = this.indoorCushionEntries.map((e) => e.hitMesh).filter(Boolean);
+    this.indoorSeatInfoProvider = indoorSeatInfoProvider;
+    this.rebuildPickTargetsCache();
+  }
+
+  registerGardenLanternTargets(targets = []) {
+    this.gardenLanternTargets = Array.isArray(targets) ? targets : [];
+    for (const t of this.gardenLanternTargets) {
+      if (!this.interactiveTargets.includes(t)) {
+        this.interactiveTargets.push(t);
+      }
+    }
+    this.rebuildPickTargetsCache();
   }
 
   initInteractiveWindBell() {
@@ -102,7 +150,7 @@ export class PropsManager {
   }
 
   initFallingFoliage3D() {
-    this.leafCount = this.sceneManager.isMobile ? 48 : 96;
+    this.leafCount = 96;
     this.leafDummy = new C_ENGINE.Object3D();
     this.leafData = [];
 
@@ -172,9 +220,10 @@ export class PropsManager {
       lanternsRoot.remove(lanternsRoot.children[0]);
     }
     this.lanternMeshes = [];
-    this.interactiveTargets = this.interactiveTargets.filter(
-      (obj) => obj.userData?.type === 'windbell'
-    );
+    this.interactiveTargets = [
+      ...this.interactiveTargets.filter((obj) => obj.userData?.type === 'windbell'),
+      ...(this.gardenLanternTargets || [])
+    ];
 
     const spaceWishes = allWishes.filter(
       (w) => !w.space || w.space === 'cheongpungsa' || w.space === 'buseoksa'
@@ -241,7 +290,7 @@ export class PropsManager {
 
       const bodyMesh = new C_ENGINE.Mesh(bodyGeo, bodyMat);
       bodyMesh.position.y = lanternCenterY;
-      bodyMesh.castShadow = !this.sceneManager.isMobile;
+      bodyMesh.castShadow = true;
       bodyMesh.userData = lanternData;
       pivot.add(bodyMesh);
       this.interactiveTargets.push(bodyMesh);
@@ -281,6 +330,8 @@ export class PropsManager {
         speed: 1.1 + (idx % 3) * 0.25
       });
     });
+
+    this.rebuildPickTargetsCache();
   }
 
   getLanternWorldPos(wishId) {
@@ -349,14 +400,17 @@ export class PropsManager {
   }
 
   pickInteractiveTarget(clientX, clientY) {
-    const rect = this.sceneManager.container.getBoundingClientRect();
+    if (!this.cachedContainerRect) {
+      this.cachedContainerRect = this.sceneManager.container.getBoundingClientRect();
+    }
+    const rect = this.cachedContainerRect;
     if (!rect.width || !rect.height) return null;
 
     this.mouseNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     this.mouseNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.mouseNDC, this.sceneManager.camera);
 
-    const hits = this.raycaster.intersectObjects(this.interactiveTargets, false);
+    const hits = this.raycaster.intersectObjects(this.allPickTargets, false);
     if (hits.length > 0 && hits[0].distance < 75) {
       return hits[0].object.userData;
     }
@@ -367,8 +421,16 @@ export class PropsManager {
     const data = this.pickInteractiveTarget(clientX, clientY);
     const canvas = this.sceneManager.renderer.domElement;
 
+    this.hoveredSeatIndex = data?.type === 'cushion' ? data.seatIndex : null;
+    this.hoveredIndoorSeatIndex = data?.type === 'hallCushion' ? data.hallSeatIndex : null;
+
     if (data) {
       canvas.style.cursor = 'pointer';
+      // 방석(차경루·청풍사 실내)은 팝업 텍스트 상자 없이 바닥 호버 링만 표시
+      if (data.type === 'cushion' || data.type === 'hallCushion') {
+        if (tooltipEl) tooltipEl.classList.remove('visible');
+        return;
+      }
       if (tooltipEl) {
         tooltipEl.style.left = `${clientX}px`;
         tooltipEl.style.top = `${clientY}px`;
@@ -471,6 +533,57 @@ export class PropsManager {
       if (p.alpha <= 0) {
         fxRoot.remove(p.sprite);
         this.hapjangParticles.splice(i, 1);
+      }
+    }
+
+    // 6. 차경루 21개 방석 선택·호버·점유 링 피드백 업데이트
+    if (this.cushionEntries.length > 0 && this.seatInfoProvider) {
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.2);
+      for (const entry of this.cushionEntries) {
+        const info = this.seatInfoProvider(entry.seatIndex);
+        const isHovered = this.hoveredSeatIndex === entry.seatIndex;
+        if (info?.status === 'mine') {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(0xfbbf24);
+          entry.ringMat.opacity = 0.65 + pulse * 0.28;
+          entry.ringMesh.scale.setScalar(1.0 + pulse * 0.05);
+        } else if (isHovered && info?.status === 'empty') {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(0xfef08a);
+          entry.ringMat.opacity = 0.78;
+          entry.ringMesh.scale.setScalar(1.04);
+        } else if (info?.status === 'occupied') {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(isHovered ? 0xf87171 : 0x6ee7b7);
+          entry.ringMat.opacity = isHovered ? 0.65 : 0.32;
+          entry.ringMesh.scale.setScalar(1.0);
+        } else {
+          entry.ringMesh.visible = false;
+          entry.ringMat.opacity = 0;
+        }
+      }
+    }
+
+    // 7. 청풍사 실내 40석 방석 선택·호버 링 피드백 업데이트
+    if (this.indoorCushionEntries.length > 0 && this.indoorSeatInfoProvider) {
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.2);
+      for (const entry of this.indoorCushionEntries) {
+        const info = this.indoorSeatInfoProvider(entry.hallSeatIndex);
+        const isHovered = this.hoveredIndoorSeatIndex === entry.hallSeatIndex;
+        if (info?.status === 'mine') {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(0xfbbf24);
+          entry.ringMat.opacity = 0.65 + pulse * 0.28;
+          entry.ringMesh.scale.setScalar(1.0 + pulse * 0.05);
+        } else if (isHovered) {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(0xfef08a);
+          entry.ringMat.opacity = 0.78;
+          entry.ringMesh.scale.setScalar(1.04);
+        } else {
+          entry.ringMesh.visible = false;
+          entry.ringMat.opacity = 0;
+        }
       }
     }
   }

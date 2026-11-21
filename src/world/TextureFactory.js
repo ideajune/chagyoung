@@ -129,10 +129,10 @@ export class TextureFactory {
   }
 
   /**
-   * 청풍사(淸風寺) 본전 고해상도(1536×540) 전통 대편액 현판 텍스처
-   * - 감청흑색 고목 바탕 + 당초·연화 조각 액자 테두리 + 양각 금박 우횡서('淸 風 寺' -> 좌측부터 '寺 風 淸')
+   * 청풍명월(淸風明月) 본전 고해상도(1536×540) 전통 대편액 현판 텍스처
+   * - 감청흑색 고목 바탕 + 당초·연화 조각 액자 테두리 + 양각 금박 우횡서('淸 風 明 月' -> 좌측부터 '月 明 風 淸')
    */
-  static createMainHallPlaqueTexture(hanjaText = '淸 風 寺', options = {}) {
+  static createMainHallPlaqueTexture(hanjaText = '淸 風 明 月', options = {}) {
     const canvas = document.createElement('canvas');
     canvas.width = 1536;
     canvas.height = 540;
@@ -207,8 +207,8 @@ export class TextureFactory {
       ctx.fill();
     }
 
-    // 4. 양각 황금박 서예 ('淸 風 寺' 3글자 여유 배치)
-    const rawChars = String(hanjaText || '淸風寺')
+    // 4. 양각 황금박 서예 ('淸 風 明 月' 4글자 여유 배치)
+    const rawChars = String(hanjaText || '淸風明月')
       .replace(/\s+/g, '')
       .split('')
       .filter(Boolean);
@@ -278,7 +278,7 @@ export class TextureFactory {
   }
 
   static createMuryangSquarePlaqueTexture() {
-    return TextureFactory.createMainHallPlaqueTexture('淸 風 寺', { rtl: true });
+    return TextureFactory.createMainHallPlaqueTexture('淸 風 明 月', { rtl: true });
   }
 
   static createCloudTexture() {
@@ -360,8 +360,8 @@ export class TextureFactory {
   }
 
   static createSobaeksanVistaTexture(onPhotoLoaded) {
-    const W = 2560;
-    const H = 1024;
+    const W = 1280;
+    const H = 512;
     const canvas = document.createElement('canvas');
     canvas.width = W;
     canvas.height = H;
@@ -518,8 +518,8 @@ export class TextureFactory {
   }
 
   static createRealisticGiwaRoofTexture() {
-    const W = 1024;
-    const H = 1024;
+    const W = 512;
+    const H = 512;
     const colorCanvas = document.createElement('canvas');
     colorCanvas.width = W;
     colorCanvas.height = H;

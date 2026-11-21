@@ -219,20 +219,37 @@ export const WANDERER_POETIC_NAMES = [
   '은은한 달빛',
   '푸른 산들바람',
   '보슬한 봄비',
-  '고운 노을빛'
+  '고운 노을빛',
+  '깊은 산새',
+  '차분한 돌담',
+  '단정한 연꽃',
+  '그윽한 차향',
+  '아득한 운해',
+  '수줍은 들꽃',
+  '넉넉한 바위',
+  '투명한 여울',
+  '다정한 등불',
+  '산뜻한 대숲',
+  '평온한 솔숲',
+  '조용한 별빛',
+  '담백한 한지',
+  '선선한 처마',
+  '맑은 풍경음',
+  '온화한 새벽'
 ];
 
 export const WANDERER_PALETTES = [
   {
-    id: 'ink',
-    label: '먹빛',
-    fullName: '먹빛 산사 도포',
-    outerRobe: 0x363d45,
-    innerRobe: 0xd8d2c5,
-    collar: 0xf2ede2,
-    shoes: 0xc9c1b2,
-    bambooTint: 0xd4b475,
-    orbHex: '#6c7a89',
+    id: 'celadon',
+    label: '연옥빛',
+    fullName: '연옥빛 풍류 도포',
+    outerRobe: 0x99af96,
+    innerRobe: 0xe8dcc6,
+    trousers: 0xcab99f,
+    collar: 0xf5efe2,
+    shoes: 0xede5d6,
+    bambooTint: 0xd8be92,
+    orbHex: '#99af96',
     markerHex: 0xffd27d
   },
   {
@@ -240,9 +257,9 @@ export const WANDERER_PALETTES = [
     label: '학창의',
     fullName: '솔빛 학창의 도포',
     outerRobe: 0xdce3dc,
-    innerRobe: 0x4f6457,
+    innerRobe: 0x5c7264,
     collar: 0xf7f4eb,
-    shoes: 0xb8c2b9,
+    shoes: 0xd8d2c6,
     bambooTint: 0xd9bc82,
     orbHex: '#88b397',
     markerHex: 0x98f5c4
@@ -251,12 +268,12 @@ export const WANDERER_PALETTES = [
     id: 'maple',
     label: '단풍',
     fullName: '치자·단풍 행자복',
-    outerRobe: 0xd88835,
-    innerRobe: 0x768568,
-    collar: 0xf3ead8,
-    shoes: 0xd6c8b2,
-    bambooTint: 0xcfa968,
-    orbHex: '#e69a45',
+    outerRobe: 0xc98249,
+    innerRobe: 0xe8ddc8,
+    collar: 0xf5ede0,
+    shoes: 0xe2d7c5,
+    bambooTint: 0xd4b074,
+    orbHex: '#d89054',
     markerHex: 0xffc46b
   },
   {
@@ -264,9 +281,9 @@ export const WANDERER_PALETTES = [
     label: '운해',
     fullName: '운해빛 옥색 도포',
     outerRobe: 0x6f8b96,
-    innerRobe: 0xd7dfd9,
+    innerRobe: 0xe2dfd7,
     collar: 0xf4f6f2,
-    shoes: 0xbac5c8,
+    shoes: 0xd8d8d0,
     bambooTint: 0xcab07a,
     orbHex: '#7fa8b8',
     markerHex: 0x9be2ff
@@ -313,6 +330,22 @@ export const WANDERER_SPOTS = {
       icon: '🍁',
       pos: [7.8, -0.78, -7.2],
       facingYaw: -0.3,
+      posture: 'walk'
+    },
+    {
+      id: 'cheongpung_bridge',
+      label: '동쪽 연화지 · 청풍교',
+      icon: '🌉',
+      pos: [28.5, 0.37, -4.5],
+      facingYaw: 1.57,
+      posture: 'walk'
+    },
+    {
+      id: 'wish_lantern_garden',
+      label: '서쪽 소원 연등 정원',
+      icon: '🏮',
+      pos: [-28.5, -0.52, -4.5],
+      facingYaw: -1.57,
       posture: 'walk'
     }
   ]

@@ -183,8 +183,57 @@ body.zen-mode .top-bar.hud-chrome {
   z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 10px;
   pointer-events: none;
+}
+
+.room-status-pill {
+  pointer-events: none;
+  border: 1px solid rgba(244, 241, 234, 0.22);
+  background: rgba(14, 18, 25, 0.84);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 0.81rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.44);
+}
+
+.room-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.85);
+  flex-shrink: 0;
+}
+
+.room-live-dot.is-local {
+  background: #fbbf24;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.8);
+}
+
+.room-status-name {
+  color: #fffbeb;
+  letter-spacing: -0.01em;
+}
+
+.room-status-count {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.20);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  color: #fde68a;
 }
 
 .top-bar-actions {
@@ -953,6 +1002,11 @@ body.zen-mode .zen-restore-pill {
   border: 1.5px solid rgba(245, 158, 11, 0.65);
   background: radial-gradient(circle, rgba(245, 158, 11, 0.32) 0%, rgba(245, 158, 11, 0.02) 70%);
   box-shadow: 0 0 32px rgba(245, 158, 11, 0.3);
+  transform: scale(0.72);
+  opacity: 0.55;
+}
+
+.breathing-guide.active .breath-orb {
   animation: breath-cycle 10s ease-in-out infinite;
 }
 
@@ -1024,29 +1078,23 @@ body.zen-mode .zen-restore-pill {
    MOBILE THERMAL OPTIMIZATION & RESPONSIVE LAYOUT
    ========================================================================== */
 @media (max-width: 768px) {
-  .icon-btn,
-  .bottom-dock,
-  .sound-mixer-panel,
-  .toast-banner,
-  .camera-hint-pill,
-  .lantern-3d-tooltip,
-  .zen-restore-pill,
-  .modal-backdrop {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-
-  .icon-btn,
-  .bottom-dock,
-  .sound-mixer-panel {
-    background: rgba(12, 16, 22, 0.90);
-  }
-
+  /* PC와 동일한 글래스모피즘 색감·질감을 유지하면서 모바일 반응형 레이아웃만 적용 */
   .top-bar {
     top: calc(10px + var(--safe-top));
     left: calc(10px + var(--safe-left));
     right: calc(10px + var(--safe-right));
     gap: 6px;
+  }
+
+  .room-status-pill {
+    padding: 7px 11px;
+    font-size: 0.74rem;
+    gap: 6px;
+  }
+
+  .room-status-count {
+    font-size: 0.69rem;
+    padding: 1px 6px;
   }
 
   .icon-btn.sound-mute-btn,
@@ -1092,9 +1140,6 @@ body.zen-mode .zen-restore-pill {
   }
 
   .visitor-label {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    background: rgba(12, 15, 20, 0.82);
     font-size: 0.72rem;
     padding: 2px 8px;
   }

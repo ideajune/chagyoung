@@ -1,5 +1,5 @@
 /**
- * HudController — 상단 음향 바, 음향 설정 믹서, 소원 연등 열람·작성 모달, 하단 3버튼 독, 호흡 명상 가이드, 풍경멍 모드 및 토스트 UI 전담 제어
+ * HudController — 상단 산방 현황 표시·음향 바, 음향 설정 믹서, 소원 연등 열람·작성 모달, 하단 3버튼 독, 호흡 명상 가이드, 풍경멍 모드 및 토스트 UI 전담 제어
  */
 
 import { SPACE_META } from '../config/constants.js';
@@ -10,6 +10,9 @@ export class HudController {
     this.propsManager = propsManager;
     this.cameraController = cameraController;
     this.audioEngine = audioEngine;
+
+    this.wandererManager = null;
+    this.multiplayerClient = null;
 
     this.activeWishId = null;
     this.selectedLanternColor = 'amber';
@@ -24,7 +27,16 @@ export class HudController {
     this.sync3DLanterns();
   }
 
+  setMultiplayerClient(client) {
+    this.multiplayerClient = client;
+    if (client) {
+      this.updateRoomStatusUI(client.getRoomInfo());
+    }
+  }
+
   bindWandererActions(wandererManager) {
+    this.wandererManager = wandererManager;
+
     document
       .getElementById('spirit-bow-btn')
       ?.addEventListener('click', () => wandererManager.triggerGreeting());
@@ -33,6 +45,20 @@ export class HudController {
       ?.addEventListener('click', () => wandererManager.togglePosture());
 
     this.updatePostureButton(wandererManager.isMeditatingOrHeading);
+  }
+
+  updateRoomStatusUI(roomInfo) {
+    if (!roomInfo) return;
+
+    const nameEl = document.getElementById('room-status-name');
+    const countEl = document.getElementById('room-status-count');
+    const dotEl = document.getElementById('room-live-dot');
+
+    if (nameEl) nameEl.textContent = `청풍사 제${roomInfo.roomId}산방`;
+    if (countEl) countEl.textContent = `${roomInfo.visitorCount} / ${roomInfo.maxCapacity}명`;
+    if (dotEl) {
+      dotEl.classList.toggle('is-local', roomInfo.transportMode === 'local-channel');
+    }
   }
 
   updatePostureButton(isMeditatingOrHeading) {
@@ -125,6 +151,7 @@ export class HudController {
       btn.classList.add('pressed');
     }
 
+    this.multiplayerClient?.publishWishHapjang(wish.id, wish.hapjang);
     this.propsManager.spawnHapjangParticles3D(wish.id);
     this.showToast('🙏 따뜻한 합장의 마음이 3D 연등 불빛을 타고 하늘로 피어오릅니다.');
   }
@@ -133,6 +160,11 @@ export class HudController {
     const meta = SPACE_META.buseoksa;
     const descEl = document.getElementById('write-modal-desc');
     if (descEl) descEl.textContent = meta.writeDesc;
+
+    const authorInput = document.getElementById('wish-author');
+    if (authorInput && this.wandererManager?.profile?.name) {
+      authorInput.placeholder = this.wandererManager.profile.name;
+    }
 
     document.getElementById('write-modal-backdrop')?.classList.add('open');
     setTimeout(() => {
@@ -153,7 +185,8 @@ export class HudController {
     const text = textInput?.value.trim();
     if (!text) return;
 
-    const author = authorInput?.value.trim() || '산사 나그네';
+    const defaultAuthor = this.wandererManager?.profile?.name || '산사 나그네';
+    const author = authorInput?.value.trim() || defaultAuthor;
     const tag = tagSelect?.value || '마음 평안';
 
     const newWish = this.wishStore.addWish({
@@ -162,6 +195,8 @@ export class HudController {
       tag,
       text
     });
+
+    this.multiplayerClient?.publishWishAdded(newWish);
 
     if (textInput) textInput.value = '';
     if (authorInput) authorInput.value = '';
@@ -174,10 +209,37 @@ export class HudController {
     this.showToast('🏮 새로운 3D 소원 연등이 밝혀졌습니다!');
   }
 
-  triggerBellRingInteraction() {
-    this.audioEngine.strikeWindBell(0.95);
+  handleRemoteWishesSync(remoteWishes) {
+    if (this.wishStore.syncFromServer(remoteWishes)) {
+      this.sync3DLanterns();
+    }
+  }
+
+  handleRemoteWishAdded(wish) {
+    const added = this.wishStore.applyRemoteWishAdded(wish);
+    if (!added) return;
+    this.sync3DLanterns();
+    this.propsManager.spawnHapjangParticles3D(added.id);
+    this.showToast(`🏮 '${added.author}'님이 차경루 처마에 새 소원 연등을 걸었습니다.`);
+  }
+
+  handleRemoteWishHapjang(wishId, hapjangCount) {
+    const updated = this.wishStore.applyRemoteHapjang(wishId, hapjangCount);
+    if (!updated) return;
+    if (this.activeWishId === wishId) {
+      const countEl = document.getElementById('reader-hapjang-count');
+      if (countEl) countEl.textContent = String(updated.hapjang);
+    }
+    this.propsManager.spawnHapjangParticles3D(wishId);
+  }
+
+  triggerBellRingInteraction({ fromRemote = false } = {}) {
+    this.audioEngine.strikeWindBell(fromRemote ? 0.72 : 0.95);
     this.propsManager.exciteWindBell();
-    this.showToast('🔔 처마 끝 풍경종이 은은하게 울립니다.');
+    if (!fromRemote) {
+      this.multiplayerClient?.sendAction('bell', {});
+      this.showToast('🔔 처마 끝 풍경종이 은은하게 울립니다.');
+    }
   }
 
   setMixerSliders(bell, water, wind) {
@@ -330,6 +392,7 @@ export class HudController {
     const guideEl = document.getElementById('breathing-guide');
     if (!guideEl) return;
     const textEl = document.getElementById('breath-text');
+    const orbEl = guideEl.querySelector('.breath-orb');
 
     const isActive =
       typeof forceState === 'boolean'
@@ -340,30 +403,62 @@ export class HudController {
       clearTimeout(this.breathGuideTimer);
       this.breathGuideTimer = null;
     }
+    if (this.breathGuideRaf) {
+      cancelAnimationFrame(this.breathGuideRaf);
+      this.breathGuideRaf = null;
+    }
 
     if (isActive && textEl) {
-      const prompts = [
-        { text: '코끝으로 산사의 맑은 공기를 천천히 들이마십니다 (4초)', durationMs: 4000 },
-        { text: '가슴 가득 고요함을 잠시 머금어 봅니다 (2초)', durationMs: 2000 },
-        { text: '어깨의 긴장을 내려놓으며 길게 내쉽니다 (4초)', durationMs: 4000 }
-      ];
-      const maxCycles = 2; // 명상 시작 후 호흡 안내 멘트는 2회 사이클만 반복 후 자동 종료
-      const totalSteps = prompts.length * maxCycles;
-      let currentStep = 0;
+      // 호흡 오브 CSS 애니메이션(10초 주기: 4초 들숨 / 2초 멈춤 / 4초 날숨)을 0초 지점에서 정확히 재시작
+      if (orbEl) {
+        orbEl.style.animation = 'none';
+        void orbEl.offsetWidth;
+        orbEl.style.animation = '';
+      }
 
-      const advanceStep = () => {
-        if (currentStep >= totalSteps) {
-          this.breathGuideTimer = null;
+      const phases = [
+        { label: '코끝으로 산사의 맑은 공기를 천천히 들이마십니다', durationSec: 4 },
+        { label: '가슴 가득 고요함을 잠시 머금어 봅니다', durationSec: 2 },
+        { label: '어깨의 긴장을 내려놓으며 길게 내쉽니다', durationSec: 4 }
+      ];
+      const cycleDurationSec = phases.reduce((sum, p) => sum + p.durationSec, 0); // 10초
+      const maxCycles = 2; // 총 20초 (2회 사이클)
+      const totalDurationMs = cycleDurationSec * maxCycles * 1000;
+      const startTime = performance.now();
+      let lastRenderedText = '';
+
+      const updateBreathingText = (now) => {
+        const elapsedMs = now - startTime;
+        if (elapsedMs >= totalDurationMs) {
+          this.breathGuideRaf = null;
           guideEl.classList.remove('active');
           return;
         }
-        const item = prompts[currentStep % prompts.length];
-        textEl.textContent = item.text;
-        currentStep += 1;
-        this.breathGuideTimer = setTimeout(advanceStep, item.durationMs);
+
+        const inCycleSec = (elapsedMs * 0.001) % cycleDurationSec;
+        let acc = 0;
+        let activePhase = phases[phases.length - 1];
+        let phaseRemainingSec = 1;
+
+        for (const phase of phases) {
+          if (inCycleSec < acc + phase.durationSec) {
+            activePhase = phase;
+            phaseRemainingSec = Math.max(1, Math.ceil(acc + phase.durationSec - inCycleSec));
+            break;
+          }
+          acc += phase.durationSec;
+        }
+
+        const nextText = `${activePhase.label} (${phaseRemainingSec}초)`;
+        if (nextText !== lastRenderedText) {
+          textEl.textContent = nextText;
+          lastRenderedText = nextText;
+        }
+
+        this.breathGuideRaf = requestAnimationFrame(updateBreathingText);
       };
 
-      advanceStep();
+      updateBreathingText(startTime);
     }
   }
 

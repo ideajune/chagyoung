@@ -18,22 +18,33 @@ export class SanSaAudioEngine {
     this.autoBellTimer = null;
     this.birdSongTimer = null;
 
-    // templebell.wav 앞 50%(~17.5초)만 재생 후 페이드아웃, 60초 간격 반복
-    this.bellWavUrl = 'templebell.wav';
+    // 추후 경량 범종 MP3 파일 업로드 시 파일 경로(예: 'templebell.mp3')를 지정하면 자동 연동됩니다.
+    // 파일이 지정되지 않은 동안에는 주기적 합성음('딩~' 소리)을 재생하지 않습니다.
+    this.bellAudioUrl = null;
     this.bellRepeatIntervalSec = 60;
     this.bellPlayFraction = 0.50;
     this.bellDefaultDurationSec = 35.03;
     this.bellRepeatTimer = null;
     this.needsGestureUnlock = false;
 
-    this.bellLoopAudio = new Audio(this.bellWavUrl);
+    this.bellLoopAudio = null;
+    this.bellOnceAudio = null;
+
+    if (this.bellAudioUrl) {
+      this.initExternalBellAudio(this.bellAudioUrl);
+    }
+  }
+
+  initExternalBellAudio(url) {
+    this.bellAudioUrl = url;
+    this.bellLoopAudio = new Audio(url);
     this.bellLoopAudio.loop = false;
-    this.bellLoopAudio.preload = 'auto';
+    this.bellLoopAudio.preload = 'none';
     this.bellLoopAudio.volume = this.bellLevel;
 
-    this.bellOnceAudio = new Audio(this.bellWavUrl);
+    this.bellOnceAudio = new Audio(url);
     this.bellOnceAudio.loop = false;
-    this.bellOnceAudio.preload = 'auto';
+    this.bellOnceAudio.preload = 'none';
     this.bellOnceAudio.volume = this.bellLevel;
 
     const enforceFiftyPercentPlayLimit = (audioEl, getBaseVolume) => {
@@ -313,24 +324,30 @@ export class SanSaAudioEngine {
 
   startBellRepeatCycle() {
     this.stopBellRepeatCycle();
-    this.bellLoopAudio.currentTime = 0;
-    this.bellLoopAudio.volume = Math.max(0, Math.min(1, this.bellLevel));
-    this.bellLoopAudio
-      .play()
-      .then(() => {
-        this.needsGestureUnlock = false;
+
+    const triggerBell = () => {
+      if (this.bellLoopAudio) {
+        this.bellLoopAudio.currentTime = 0;
+        this.bellLoopAudio.volume = Math.max(0, Math.min(1, this.bellLevel));
+        this.bellLoopAudio
+          .play()
+          .then(() => {
+            this.needsGestureUnlock = false;
+            this.onBellStrike?.();
+          })
+          .catch(() => {
+            this.needsGestureUnlock = true;
+          });
+      } else {
         this.onBellStrike?.();
-      })
-      .catch(() => {
-        this.needsGestureUnlock = true;
-      });
+      }
+    };
+
+    triggerBell();
 
     this.bellRepeatTimer = setInterval(() => {
       if (!this.isPlaying) return;
-      this.bellLoopAudio.currentTime = 0;
-      this.bellLoopAudio.volume = Math.max(0, Math.min(1, this.bellLevel));
-      this.bellLoopAudio.play().catch(() => {});
-      this.onBellStrike?.();
+      triggerBell();
     }, this.bellRepeatIntervalSec * 1000);
   }
 
@@ -339,7 +356,7 @@ export class SanSaAudioEngine {
       clearInterval(this.bellRepeatTimer);
       this.bellRepeatTimer = null;
     }
-    this.bellLoopAudio.pause();
+    this.bellLoopAudio?.pause();
   }
 
   startDefaultPlayback() {
@@ -371,14 +388,15 @@ export class SanSaAudioEngine {
       }
       if (
         this.needsGestureUnlock ||
-        (this.bellLoopAudio.paused &&
+        (this.bellLoopAudio &&
+          this.bellLoopAudio.paused &&
           this.bellLoopAudio.currentTime === 0 &&
           !this.bellRepeatTimer)
       ) {
         this.needsGestureUnlock = false;
         if (!this.bellRepeatTimer) {
           this.startBellRepeatCycle();
-        } else if (this.bellLoopAudio.currentTime < 2.0) {
+        } else if (this.bellLoopAudio && this.bellLoopAudio.currentTime < 2.0) {
           this.bellLoopAudio.play().catch(() => {});
         }
       }
@@ -398,14 +416,14 @@ export class SanSaAudioEngine {
     this.updateContinuousVolumes();
 
     if (this.isPlaying) {
-      this.bellOnceAudio.pause();
+      this.bellOnceAudio?.pause();
       this.startBellRepeatCycle();
       this.scheduleNextAutoBell();
       this.scheduleNextBirdSong(3500);
     } else {
       this.stopBellRepeatCycle();
       this.stopBirdSongCycle();
-      this.bellOnceAudio.pause();
+      this.bellOnceAudio?.pause();
       if (this.autoBellTimer) {
         clearTimeout(this.autoBellTimer);
         this.autoBellTimer = null;
@@ -415,8 +433,12 @@ export class SanSaAudioEngine {
   }
 
   updateContinuousVolumes() {
-    this.bellLoopAudio.volume = Math.max(0, Math.min(1, this.bellLevel));
-    this.bellOnceAudio.volume = Math.max(0.25, Math.min(1, this.bellLevel));
+    if (this.bellLoopAudio) {
+      this.bellLoopAudio.volume = Math.max(0, Math.min(1, this.bellLevel));
+    }
+    if (this.bellOnceAudio) {
+      this.bellOnceAudio.volume = Math.max(0.25, Math.min(1, this.bellLevel));
+    }
 
     if (!this.ctx || !this.waterGain || !this.windGain) return;
     const now = this.ctx.currentTime;
@@ -445,6 +467,10 @@ export class SanSaAudioEngine {
   strikeWindBell(intensity = 0.85) {
     const vol = Math.max(0.25, Math.min(1, intensity * Math.max(0.45, this.bellLevel)));
 
+    if (!this.bellLoopAudio || !this.bellOnceAudio) {
+      return;
+    }
+
     if (this.isPlaying && !this.bellLoopAudio.paused) {
       this.bellLoopAudio.volume = Math.max(this.bellLoopAudio.volume, vol);
       return;
@@ -456,9 +482,9 @@ export class SanSaAudioEngine {
       this.bellOnceAudio.volume = vol;
       this.bellOnceAudio
         .play()
-        .catch((err) => console.warn('templebell.wav play blocked:', err));
+        .catch((err) => console.warn('Bell audio play blocked:', err));
     } catch (err) {
-      console.warn('Error playing templebell.wav:', err);
+      console.warn('Error playing bell audio:', err);
     }
   }
 }
