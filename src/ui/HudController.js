@@ -54,7 +54,7 @@ export class HudController {
     const countEl = document.getElementById('room-status-count');
     const dotEl = document.getElementById('room-live-dot');
 
-    if (nameEl) nameEl.textContent = `청풍사 제${roomInfo.roomId}산방`;
+    if (nameEl) nameEl.textContent = `청풍명월 제 ${roomInfo.roomId}산방`;
     if (countEl) countEl.textContent = `${roomInfo.visitorCount} / ${roomInfo.maxCapacity}명`;
     if (dotEl) {
       dotEl.classList.toggle('is-local', roomInfo.transportMode === 'local-channel');

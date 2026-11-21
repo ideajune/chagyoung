@@ -558,6 +558,24 @@ export function createMonk(options = {}) {
   let mode = 'walk';
   let stance = 1.0;
   let walkPhase = 0;
+  let lastElapsed = 0;
+  let greetStart = -999;
+  let bowStart = -999;
+
+  const smoothstep01 = (t) => {
+    const s = Math.max(0, Math.min(1, t));
+    return s * s * (3 - 2 * s);
+  };
+
+  const gestureEnvelope = (elapsed, start, duration) => {
+    const u = (elapsed - start) / duration;
+    if (u <= 0 || u >= 1) return 0;
+    if (u < 0.28) return smoothstep01(u / 0.28);
+    if (u <= 0.66) return 1;
+    return smoothstep01((1 - u) / 0.34);
+  };
+
+  const lerp = (a, b, t) => a + (b - a) * t;
 
   const actor = {
     group,
@@ -567,11 +585,20 @@ export function createMonk(options = {}) {
       mode = nextMode === 'kneel' ? 'kneel' : 'walk';
     },
 
+    greet(now) {
+      greetStart = Number.isFinite(now) ? now : lastElapsed;
+    },
+
+    bow(now) {
+      bowStart = Number.isFinite(now) ? now : lastElapsed;
+    },
+
     captureMotion() {
       return { mode, stance, walkPhase };
     },
 
     update(elapsed = 0, dt = 0.016, normalizedSpeed = 0) {
+      lastElapsed = elapsed;
       const targetStance = mode === 'kneel' ? 0.0 : 1.0;
       const blendRate = dt > 0 ? 1 - Math.exp(-dt * 9.5) : 1.0;
       stance += (targetStance - stance) * blendRate;
@@ -583,6 +610,11 @@ export function createMonk(options = {}) {
 
       const w = stance;
       const k = 1 - stance;
+
+      const greetPulse = gestureEnvelope(elapsed, greetStart, 2.2);
+      const bowPulse = gestureEnvelope(elapsed, bowStart, 2.3);
+      const prayer = Math.max(greetPulse, bowPulse);
+      const bowDepth = bowPulse > greetPulse ? 1.15 : 1.0;
 
       const stride = Math.sin(walkPhase) * speed * w;
       const counterStride = Math.cos(walkPhase) * speed * w;
@@ -605,12 +637,21 @@ export function createMonk(options = {}) {
       sashTail2.scale.y = 0.80 * (1 - 0.40 * k);
       sashTail2.position.y = 0.115 + 0.055 * k;
 
+      // 상체·고개: 기본 자세 + 합장 인사 시 전방(-Z)으로 정중히 숙임
       hips.rotation.set(k * 0.04, stride * 0.07, -stride * 0.025);
-      spine.rotation.set(k * 0.03 + breath * 0.014, -stride * 0.04, 0);
-      chest.rotation.set(k * 0.02 + breath * 0.018, -stride * 0.05, 0);
+      spine.rotation.set(
+        k * 0.03 + breath * 0.014 - prayer * 0.20 * bowDepth,
+        -stride * 0.04,
+        0
+      );
+      chest.rotation.set(
+        k * 0.02 + breath * 0.018 - prayer * 0.18 * bowDepth,
+        -stride * 0.05,
+        0
+      );
       head.rotation.set(
-        0.02 + k * 0.05 - breath * 0.012,
-        Math.sin(elapsed * 0.45) * 0.03 * k,
+        0.02 + k * 0.05 - breath * 0.012 - prayer * 0.26 * bowDepth,
+        Math.sin(elapsed * 0.45) * 0.03 * k * (1 - prayer),
         0
       );
 
@@ -626,18 +667,42 @@ export function createMonk(options = {}) {
       legL.foot.rotation.set(stride * 0.16, 0, k * 0.25);
       legR.foot.rotation.set(-stride * 0.16, 0, -k * 0.25);
 
-      // 양팔·소매: 보행 자연 스윙 vs 시안 1 좌선 자세(팔꿈치는 몸통 옆에 편안히 내리고, 소매·양손이 단전 앞 무릎 위로 모아짐)
+      // 양팔·소매: 보행/좌선 기본 자세 -> 합장 시 양손을 가슴 중앙으로 정중히 모음
       const idleArmOut = 0.44 * w;
-      armL.upper.rotation.set(-stride * 0.46 + k * 0.34, 0, -idleArmOut - k * 0.22);
-      armR.upper.rotation.set(stride * 0.46 + k * 0.34, 0, idleArmOut + k * 0.22);
+      const baseUpperLX = -stride * 0.46 + k * 0.34;
+      const baseUpperRX = stride * 0.46 + k * 0.34;
+      const baseUpperLZ = -idleArmOut - k * 0.22;
+      const baseUpperRZ = idleArmOut + k * 0.22;
+
+      armL.upper.rotation.set(
+        lerp(baseUpperLX, 0.76, prayer),
+        0,
+        lerp(baseUpperLZ, -0.18, prayer)
+      );
+      armR.upper.rotation.set(
+        lerp(baseUpperRX, 0.76, prayer),
+        0,
+        lerp(baseUpperRZ, 0.18, prayer)
+      );
 
       const leftElbowWalk = (0.08 + Math.max(0, -stride) * 0.28) * w;
       const rightElbowWalk = (0.08 + Math.max(0, stride) * 0.28) * w;
-      armL.forearm.rotation.set(leftElbowWalk + k * 1.02, 0, k * 0.96);
-      armR.forearm.rotation.set(rightElbowWalk + k * 1.02, 0, -k * 0.96);
+      const baseForeLX = leftElbowWalk + k * 1.02;
+      const baseForeRX = rightElbowWalk + k * 1.02;
 
-      armL.hand.rotation.set(0, 0, -k * 0.20);
-      armR.hand.rotation.set(0, 0, k * 0.20);
+      armL.forearm.rotation.set(
+        lerp(baseForeLX, 1.22, prayer),
+        0,
+        lerp(k * 0.96, 0.94, prayer)
+      );
+      armR.forearm.rotation.set(
+        lerp(baseForeRX, 1.22, prayer),
+        0,
+        lerp(-k * 0.96, -0.94, prayer)
+      );
+
+      armL.hand.rotation.set(lerp(0, 0.12, prayer), 0, lerp(-k * 0.20, -0.32, prayer));
+      armR.hand.rotation.set(lerp(0, 0.12, prayer), 0, lerp(k * 0.20, 0.32, prayer));
     }
   };
 

@@ -75,12 +75,12 @@ export class TextureFactory {
     ctx.textBaseline = 'middle';
     ctx.font = `900 ${fontSize}px "Batang", "Gungsuh", "Nanum Myeongjo", "Noto Serif KR", "AppleMyungjo", serif`;
 
-    const innerLeft = 365;
-    const innerRight = 1245;
+    const innerLeft = isRtl ? 365 : 290;
+    const innerRight = isRtl ? 1245 : 1170;
     chars.forEach((ch, idx) => {
       const cx =
         count === 1
-          ? 805
+          ? (innerLeft + innerRight) * 0.5
           : innerLeft + (idx / (count - 1)) * (innerRight - innerLeft);
       ctx.save();
       ctx.translate(cx, 274);
@@ -105,9 +105,9 @@ export class TextureFactory {
     });
     ctx.restore();
 
-    // 좌측 하단 전통 주사(朱砂) 낙관 인장
+    // 전통 주사(朱砂) 낙관 인장 (우횡서: 좌측 하단, 좌횡서: 우측 하단)
     ctx.save();
-    const sealX = 132;
+    const sealX = isRtl ? 132 : 1404;
     const sealY = 336;
     const sealSize = 64;
     ctx.fillStyle = 'rgba(162, 46, 34, 0.82)';
@@ -221,12 +221,12 @@ export class TextureFactory {
     ctx.textBaseline = 'middle';
     ctx.font = `900 ${fontSize}px "Batang", "Gungsuh", "Nanum Myeongjo", "Noto Serif KR", "AppleMyungjo", serif`;
 
-    const innerLeft = 376;
-    const innerRight = 1236;
+    const innerLeft = isRtl ? 376 : 300;
+    const innerRight = isRtl ? 1236 : 1160;
     chars.forEach((ch, idx) => {
       const cx =
         count === 1
-          ? 806
+          ? (innerLeft + innerRight) * 0.5
           : innerLeft + (idx / (count - 1)) * (innerRight - innerLeft);
       ctx.save();
       ctx.translate(cx, 274);
@@ -254,9 +254,9 @@ export class TextureFactory {
     });
     ctx.restore();
 
-    // 좌측 낙관 인장
+    // 낙관 인장 (우횡서: 좌측 하단, 좌횡서: 우측 하단)
     ctx.save();
-    const sealX = 148;
+    const sealX = isRtl ? 148 : 1388;
     const sealY = 332;
     const sealSize = 66;
     ctx.fillStyle = 'rgba(166, 46, 34, 0.84)';
@@ -278,7 +278,7 @@ export class TextureFactory {
   }
 
   static createMuryangSquarePlaqueTexture() {
-    return TextureFactory.createMainHallPlaqueTexture('淸 風 明 月', { rtl: true });
+    return TextureFactory.createMainHallPlaqueTexture('淸 風 明 月', { rtl: false });
   }
 
   static createCloudTexture() {

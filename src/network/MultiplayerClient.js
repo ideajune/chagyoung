@@ -135,7 +135,7 @@ export class MultiplayerClient {
   getRoomInfo() {
     return {
       roomId: this.roomId,
-      roomTitle: `청풍사 제${this.roomId}산방`,
+      roomTitle: `청풍명월 제 ${this.roomId}산방`,
       visitorCount: this.getVisitorCount(),
       maxCapacity: this.maxCapacity,
       transportMode: this.transportMode,

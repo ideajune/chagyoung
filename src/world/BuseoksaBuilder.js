@@ -1096,9 +1096,9 @@ export class BuseoksaBuilder {
       }
     }
 
-    // 6. '淸 風 明 月' (청풍명월) 본전 전통 가로 대편액 현판 (단일 Group 일체화로 뒤판 간섭·처마 가림 원천 차단)
+    // 6. '淸 風 明 月' (청풍명월) 본전 전통 가로 대편액 현판 (좌→우 정방향)
     const plaqueTex = TextureFactory.createMainHallPlaqueTexture(cfg.hanja || '淸 風 明 月', {
-      rtl: true
+      rtl: false
     });
     const plaqueGroup = new C_ENGINE.Group();
     plaqueGroup.name = 'CheongpungsaPlaqueGroup';
@@ -1908,8 +1908,8 @@ export class BuseoksaBuilder {
       );
     }
 
-    // 4. 차경루 우횡서 현판 (借景樓)
-    const plaqueTex = TextureFactory.createPlaqueTexture(spec.hanja, { rtl: true });
+    // 4. 차경루 좌횡서 현판 (借 景 樓)
+    const plaqueTex = TextureFactory.createPlaqueTexture(spec.hanja, { rtl: false });
     const pavPlaqueGroup = new C_ENGINE.Group();
     pavPlaqueGroup.name = 'ChagyeongruPlaqueGroup';
     pavPlaqueGroup.position.set(0, deckY + 4.30, 3.52);
