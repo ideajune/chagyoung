@@ -18,6 +18,9 @@ export class CameraController {
     // 3인칭 시점 상태 및 줌아웃 범위 (기존 대비 줌아웃 폭 약 50% 축소)
     this.yaw = 0.0;
     this.pitch = 0.02;
+    this.targetFollowYaw = null;
+    this.targetFollowPitch = null;
+    this.postureBlend = 0; // 0 = walk, 1 = kneel (착석·기립 시 카메라 높이 부드러운 보간)
     this.minDistance = 2.0;
     this.maxDistance = 11.8;
     this.defaultDistance = 3.65;
@@ -53,12 +56,18 @@ export class CameraController {
   }
 
   setFollowOrientation(yaw = 0.0, pitch = 0.02, immediate = false) {
-    this.yaw = yaw;
-    this.pitch = pitch;
     this.mode = 'follow';
     if (immediate) {
+      this.yaw = yaw;
+      this.pitch = pitch;
+      this.targetFollowYaw = null;
+      this.targetFollowPitch = null;
       this.camInitialized = false;
       this.fovInitialized = false;
+    } else {
+      // 즉시 스냅하지 않고 최단 회전 경로로 부드럽게 선회 (착석 시 카메라 튐 방지)
+      this.targetFollowYaw = yaw;
+      this.targetFollowPitch = pitch;
     }
   }
 
@@ -95,6 +104,8 @@ export class CameraController {
    */
   alignBehindHeading(characterRotationY, dt) {
     if (this.mode !== 'follow' || this.isDragging) return;
+    this.targetFollowYaw = null;
+    this.targetFollowPitch = null;
     const camAngleDiff = Math.atan2(
       Math.sin(characterRotationY - this.yaw),
       Math.cos(characterRotationY - this.yaw)
@@ -110,6 +121,8 @@ export class CameraController {
   }
 
   handleDrag(dx, dy, isTouch = false) {
+    this.targetFollowYaw = null;
+    this.targetFollowPitch = null;
     if (this.mode === 'lanternFocus') {
       this.targetYawOffset = Math.max(-0.85, Math.min(0.85, this.targetYawOffset - dx * 0.0028));
       this.targetPitchOffset = Math.max(
@@ -334,6 +347,29 @@ export class CameraController {
       window.innerWidth <= 768 || (this.camera && this.camera.aspect < 0.88);
 
     const zoomOutT = this.getZoomOutProgress();
+
+    // 착석·기립 시 카메라 목표 시선(yaw/pitch)을 최단 각도 경로로 부드럽게 선회
+    if (!this.isDragging && this.targetFollowYaw !== null) {
+      const yawDiff = Math.atan2(
+        Math.sin(this.targetFollowYaw - this.yaw),
+        Math.cos(this.targetFollowYaw - this.yaw)
+      );
+      const orientBlend = 1 - Math.exp(-dt * 3.8);
+      this.yaw += yawDiff * orientBlend;
+      if (this.targetFollowPitch !== null) {
+        this.pitch += (this.targetFollowPitch - this.pitch) * orientBlend;
+      }
+      if (
+        Math.abs(yawDiff) < 0.004 &&
+        (this.targetFollowPitch === null || Math.abs(this.targetFollowPitch - this.pitch) < 0.004)
+      ) {
+        this.yaw = this.targetFollowYaw;
+        if (this.targetFollowPitch !== null) this.pitch = this.targetFollowPitch;
+        this.targetFollowYaw = null;
+        this.targetFollowPitch = null;
+      }
+    }
+
     const maxPitch = 0.36 + zoomOutT * 0.30;
     if (this.pitch > maxPitch) {
       this.pitch += (maxPitch - this.pitch) * (1 - Math.exp(-dt * 8));
@@ -346,12 +382,18 @@ export class CameraController {
     const mobileDistScale = isMobileScreen ? 0.86 + 0.14 * Math.min(1, zoomOutT * 1.4) : 1.0;
     const effectiveDist = this.distance * mobileDistScale;
 
+    // 착석/기립 시 카메라 고도와 시선 높이를 부드럽게 보간 (뚝 떨어지는 현상 방지)
+    const targetPostureBlend = posture === 'kneel' ? 1 : 0;
+    const postureSmooth = this.camInitialized ? 1 - Math.exp(-dt * 3.6) : 1.0;
+    this.postureBlend += (targetPostureBlend - this.postureBlend) * postureSmooth;
+    const pb = this.postureBlend;
+
     const camHeightOffset = isMobileScreen
-      ? (posture === 'walk' ? 1.62 : 1.32)
-      : (posture === 'walk' ? 1.88 : 1.48);
+      ? 1.62 + (1.32 - 1.62) * pb
+      : 1.88 + (1.48 - 1.88) * pb;
     const lookHeightOffset = isMobileScreen
-      ? (posture === 'walk' ? 0.54 : 0.68)
-      : (posture === 'walk' ? 1.13 : 1.24);
+      ? 0.54 + (0.68 - 0.54) * pb
+      : 1.13 + (1.24 - 1.13) * pb;
 
     // 줌아웃 구간에 따라 자연스러운 시점 고도 상승 (중거리 완만 -> 원거리 산사 전경 부감 시점)
     const midSpan = Math.max(0, effectiveDist - 3.3);

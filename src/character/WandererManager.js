@@ -964,12 +964,12 @@ export class WandererManager {
     this.targetCushion = null;
     this.occupiedSeatIndex = targetCushion.index;
 
-    this.selfActor.group.position.set(
-      targetCushion.x,
-      ANYANGRU_CONFIG.cushionWorldY,
-      targetCushion.z
-    );
-    this.selfActor.group.rotation.y = 0.0;
+    this.seatGlideTarget = {
+      x: targetCushion.x,
+      y: ANYANGRU_CONFIG.cushionWorldY,
+      z: targetCushion.z,
+      yaw: 0.0
+    };
     this.cameraController.setFollowOrientation(0.0, 0.04, false);
     this.selfActor.setMode('kneel');
     this.spawnGroundRipple(
@@ -989,6 +989,7 @@ export class WandererManager {
     this.activeHallSeatIndex = null;
     this.targetHallCushion = null;
     this.pendingHallMeditationOnArrival = false;
+    this.seatGlideTarget = null;
     this.waypoints = [];
     this.destinationMarker.visible = false;
     this.releaseOccupiedSeat();
@@ -1021,8 +1022,12 @@ export class WandererManager {
     this.activeHallSeatIndex = cushion.index;
 
     const sitY = MURYANGSUJEON_CONFIG.interior.floorY + 0.08;
-    this.selfActor.group.position.set(cushion.x, sitY, cushion.z);
-    this.selfActor.group.rotation.y = cushion.yaw;
+    this.seatGlideTarget = {
+      x: cushion.x,
+      y: sitY,
+      z: cushion.z,
+      yaw: cushion.yaw
+    };
     this.cameraController.setFollowOrientation(cushion.yaw, 0.06, false);
     this.selfActor.setMode('kneel');
     this.spawnGroundRipple(
@@ -1381,8 +1386,22 @@ export class WandererManager {
       this.velocity.set(0, 0, 0);
     }
 
-    const targetGroundY = getGroundHeightAt(selfPos.x, selfPos.z);
-    selfPos.y += (targetGroundY - selfPos.y) * (1 - Math.exp(-dt * 16));
+    if (this.posture === 'kneel' && this.seatGlideTarget) {
+      const glidePos = 1 - Math.exp(-dt * 6.8);
+      const glideRot = 1 - Math.exp(-dt * 5.8);
+      selfPos.x += (this.seatGlideTarget.x - selfPos.x) * glidePos;
+      selfPos.z += (this.seatGlideTarget.z - selfPos.z) * glidePos;
+      selfPos.y += (this.seatGlideTarget.y - selfPos.y) * glidePos;
+
+      const yawDiff = Math.atan2(
+        Math.sin(this.seatGlideTarget.yaw - this.selfActor.group.rotation.y),
+        Math.cos(this.seatGlideTarget.yaw - this.selfActor.group.rotation.y)
+      );
+      this.selfActor.group.rotation.y += yawDiff * glideRot;
+    } else {
+      const targetGroundY = getGroundHeightAt(selfPos.x, selfPos.z);
+      selfPos.y += (targetGroundY - selfPos.y) * (1 - Math.exp(-dt * 16));
+    }
 
     const normalizedSpeed = Math.min(1, speed / activeMoveSpeed);
     this.selfActor.update(elapsed, dt, normalizedSpeed);

@@ -556,6 +556,7 @@ export function createMonk(options = {}) {
 
   // === 애니메이션 상태 ===
   let mode = 'walk';
+  let sitProgress = 0.0; // 0 = 기립(walk), 1 = 착석(kneel) — 부드러운 착석/기립 전이용
   let stance = 1.0;
   let walkPhase = 0;
   let smoothedSpeed = 0;
@@ -601,9 +602,20 @@ export function createMonk(options = {}) {
 
     update(elapsed = 0, dt = 0.016, normalizedSpeed = 0) {
       lastElapsed = elapsed;
-      const targetStance = mode === 'kneel' ? 0.0 : 1.0;
-      const blendRate = dt > 0 ? 1 - Math.exp(-dt * 9.5) : 1.0;
-      stance += (targetStance - stance) * blendRate;
+      const targetSit = mode === 'kneel' ? 1.0 : 0.0;
+      if (dt > 0) {
+        // 약 0.78초에 걸쳐 차분하게 앉고 일어서는 자연스러운 전이 속도
+        const step = dt * 1.28;
+        if (sitProgress < targetSit) {
+          sitProgress = Math.min(targetSit, sitProgress + step);
+        } else if (sitProgress > targetSit) {
+          sitProgress = Math.max(targetSit, sitProgress - step * 1.15);
+        }
+      } else {
+        sitProgress = targetSit;
+      }
+      const k = smoothstep01(sitProgress);
+      stance = 1.0 - k;
 
       const rawSpeed = Math.max(0, Math.min(1.2, Number(normalizedSpeed) || 0));
       const speedBlend = dt > 0 ? 1 - Math.exp(-dt * 10.5) : 1.0;
@@ -616,7 +628,8 @@ export function createMonk(options = {}) {
       }
 
       const w = stance;
-      const k = 1 - stance;
+      // 앉거나 일어서는 중간 구간에 상체가 무게중심을 잡기 위해 미세하게 앞으로 숙여졌다 펴지는 자연스러운 아크
+      const sitTransitionLean = -Math.sin(k * Math.PI) * 0.14;
 
       const greetPulse = gestureEnvelope(elapsed, greetStart, 2.2);
       const bowPulse = gestureEnvelope(elapsed, bowStart, 2.3);
@@ -649,16 +662,16 @@ export function createMonk(options = {}) {
       sashTail2.scale.y = 0.80 * (1 - 0.40 * k);
       sashTail2.position.y = 0.115 + 0.055 * k;
 
-      // 상체·고개: 보행 시 자연스러운 골반·어깨 반대회전 + 전방 미세 경사 + 합장 인사 숙임
+      // 상체·고개: 보행 시 자연스러운 골반·어깨 반대회전 + 전방 미세 경사 + 착석 전이 균형 숙임 + 합장 인사 숙임
       const forwardLean = -0.045 * speed * w;
       hips.rotation.set(k * 0.04 + forwardLean * 0.4, stride * 0.075, sinP * 0.028 * speed * w);
       spine.rotation.set(
-        k * 0.03 + forwardLean * 0.6 + breath * 0.014 - prayer * 0.20 * bowDepth,
+        k * 0.03 + forwardLean * 0.6 + sitTransitionLean + breath * 0.014 - prayer * 0.20 * bowDepth,
         -stride * 0.055,
         -sinP * 0.018 * speed * w
       );
       chest.rotation.set(
-        k * 0.02 + breath * 0.018 - prayer * 0.18 * bowDepth,
+        k * 0.02 + sitTransitionLean * 0.55 + breath * 0.018 - prayer * 0.18 * bowDepth,
         -stride * 0.075,
         -sinP * 0.014 * speed * w
       );

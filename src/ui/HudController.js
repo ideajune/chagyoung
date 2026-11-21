@@ -299,10 +299,6 @@ export class HudController {
       audioSettingsBtn?.setAttribute('aria-expanded', 'false');
     });
 
-    document
-      .getElementById('manual-bell-btn')
-      ?.addEventListener('click', () => this.triggerBellRingInteraction());
-
     ['water', 'wind'].forEach((type) => {
       const slider = document.getElementById(`slider-${type}`);
       if (!slider) return;
