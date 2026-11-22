@@ -573,3 +573,40 @@ export const SPACE_OBSTACLES = {
     ]
   }
 };
+
+// 차경루 21석 우선순위 정책 SSOT (클라이언트 Navigation & 서버 multiplayerServer 공용)
+// 가운데 앞자리(1줄 중앙 -> 좌우 -> 2줄 중앙 -> 좌우 -> 3줄 중앙 -> 좌우) 순차 배정
+export const FRONT_CENTER_PRIORITY_CUSHIONS = [...ANYANGRU_CUSHIONS].sort((a, b) => {
+  if (a.row !== b.row) return a.row - b.row;
+  const distCenterA = Math.abs(a.col - 4);
+  const distCenterB = Math.abs(b.col - 4);
+  if (distCenterA !== distCenterB) return distCenterA - distCenterB;
+  return a.col - b.col;
+});
+
+export function getAnyangruCushionByIndex(seatIndex) {
+  if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex >= ANYANGRU_CUSHIONS.length) {
+    return null;
+  }
+  return ANYANGRU_CUSHIONS[seatIndex] || null;
+}
+
+export function selectPriorityAnyangruCushion(x = 0, z = 0, occupiedSeatIndices = new Set()) {
+  const occupied =
+    occupiedSeatIndices instanceof Set
+      ? occupiedSeatIndices
+      : new Set(occupiedSeatIndices || []);
+
+  for (const c of FRONT_CENTER_PRIORITY_CUSHIONS) {
+    if (occupied.has(c.index)) continue;
+    return {
+      cushion: c,
+      dist: Math.hypot(x - c.x, z - c.z)
+    };
+  }
+
+  return {
+    cushion: null,
+    dist: Infinity
+  };
+}

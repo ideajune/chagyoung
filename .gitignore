@@ -12,6 +12,8 @@ sansa-view/
 부석사_사진/
 *.doc
 *.docx
+*.xlsx
+~$*
 개발 수정사항.txt
 
 # Unused local reference images (replaced by assets/environment/mountain-vista.jpg & procedural plaques)

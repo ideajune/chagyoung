@@ -2,7 +2,7 @@
  * PaljakRoofBuilder — 무량수전·안양루 실사 기반 3D 한국 전통 팔작지붕(현수선 주 지붕면, 측면 추녀 날개면, 합각벽, 용마루·내림마루·추녀마루, 수키와·수막새) 빌더
  */
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export function buildRealisticPaljakRoof(parent, spec, materials) {
   const {

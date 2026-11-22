@@ -2,8 +2,7 @@
  * SceneManager — Three.js WebGLRenderer, Scene, 조명 리그, 환경 파노라마 및 단일 통합 렌더 루프 관리
  */
 
-const C_ENGINE = window.SANSA_CORE;
-const THREE_PCF_SHADOW_MAP = 1;
+import { SANSA_CORE as C_ENGINE } from './CoreRuntime.js';
 
 export class SceneManager {
   constructor(container) {
@@ -133,30 +132,56 @@ export class SceneManager {
   loadEnvironmentPanorama(_defaultUrl = 'assets/environment/woodland.jpg') {
     const texLoader = new C_ENGINE.TextureLoader();
 
-    const applyPanoramaTexture = (url, blurriness) => {
-      texLoader.load(url, (tex) => {
-        tex.colorSpace = C_ENGINE.SRGBColorSpace;
-        tex.mapping = C_ENGINE.EquirectangularReflectionMapping;
-        this.woodlandPanorama = tex;
-        this.scene.background = tex;
-        this.scene.backgroundBlurriness = blurriness;
-        this.scene.backgroundIntensity = 0.94;
-        this.horizonUpdaters.forEach((fn) => fn());
-      });
+    this._applyPanoramaTexture = (url, blurriness) => {
+      texLoader.load(
+        url,
+        (tex) => {
+          tex.colorSpace = C_ENGINE.SRGBColorSpace;
+          tex.mapping = C_ENGINE.EquirectangularReflectionMapping;
+          const prevTex = this.woodlandPanorama;
+          this.woodlandPanorama = tex;
+          this.scene.background = tex;
+          this.scene.backgroundBlurriness = blurriness;
+          this.scene.backgroundIntensity = 0.94;
+          if (prevTex && prevTex !== tex) {
+            prevTex.dispose?.();
+          }
+          if (typeof url === 'string' && url.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+          }
+          this.horizonUpdaters.forEach((fn) => fn());
+        },
+        undefined,
+        () => {
+          if (typeof url === 'string' && url.startsWith('blob:')) {
+            URL.revokeObjectURL(url);
+          }
+        }
+      );
     };
 
     // 기본 배경을 소백산맥 맑은 하늘색 파노라마로 설정해 정면 소백산맥 사진 위로 숲 이미지가 겹치지 않도록 통일
     const skyTex = this.createSobaeksanSkyPanorama();
+    const prevTex = this.woodlandPanorama;
     this.woodlandPanorama = skyTex;
     this.scene.background = skyTex;
     this.scene.backgroundBlurriness = 0.0;
     this.scene.backgroundIntensity = 1.0;
+    if (prevTex && prevTex !== skyTex) {
+      prevTex.dispose?.();
+    }
     this.horizonUpdaters.forEach((fn) => fn());
 
     // 사용자 실사 사진 드래그 앤 드롭 교체 훅 유지
     window.applyCustomBuseoksaPhoto = (imageUrl) => {
-      applyPanoramaTexture(imageUrl, 0.004);
+      this.applyCustomPanorama(imageUrl);
     };
+  }
+
+  applyCustomPanorama(imageUrl) {
+    if (this._applyPanoramaTexture && imageUrl) {
+      this._applyPanoramaTexture(imageUrl, 0.004);
+    }
   }
 
   registerHorizonUpdater(updaterFn) {
@@ -178,27 +203,32 @@ export class SceneManager {
   }
 
   bindLifecycleEvents() {
-    const handleResize = () => this.handleResize();
-    window.addEventListener('resize', handleResize);
+    this._handleResizeBound = () => this.handleResize();
+    window.addEventListener('resize', this._handleResizeBound);
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', handleResize);
+      window.visualViewport.addEventListener('resize', this._handleResizeBound);
     }
     if (typeof ResizeObserver !== 'undefined') {
-      this.resizeObserver = new ResizeObserver(handleResize);
+      this.resizeObserver = new ResizeObserver(this._handleResizeBound);
       this.resizeObserver.observe(this.container);
     }
 
-    document.addEventListener('visibilitychange', () => {
+    this._handleVisibilityBound = () => {
       this.isPageHidden = document.hidden;
       if (!this.isPageHidden) {
         this.lastFrameTime = performance.now();
       }
-    });
+    };
+    document.addEventListener('visibilitychange', this._handleVisibilityBound);
   }
 
   handleResize() {
-    this.width = this.container.clientWidth || window.innerWidth;
-    this.height = this.container.clientHeight || window.innerHeight;
+    const nextW = this.container.clientWidth || window.innerWidth;
+    const nextH = this.container.clientHeight || window.innerHeight;
+    if (nextW === this.width && nextH === this.height) return;
+
+    this.width = nextW;
+    this.height = nextH;
     this.isMobile = this.width < 768;
 
     const aspect = this.width / Math.max(1, this.height);
@@ -215,8 +245,9 @@ export class SceneManager {
   }
 
   startLoop() {
+    if (this._rafId) cancelAnimationFrame(this._rafId);
     const tick = () => {
-      requestAnimationFrame(tick);
+      this._rafId = requestAnimationFrame(tick);
 
       if (this.isPageHidden) {
         this.lastFrameTime = performance.now();
@@ -247,5 +278,26 @@ export class SceneManager {
     };
 
     tick();
+  }
+
+  destroy() {
+    if (this._rafId) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = 0;
+    }
+    if (this._handleResizeBound) {
+      window.removeEventListener('resize', this._handleResizeBound);
+      window.visualViewport?.removeEventListener('resize', this._handleResizeBound);
+    }
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
+    if (this._handleVisibilityBound) {
+      document.removeEventListener('visibilitychange', this._handleVisibilityBound);
+    }
+    this.woodlandPanorama?.dispose?.();
+    this.envRT?.dispose?.();
+    this.renderer?.dispose?.();
   }
 }

@@ -16,11 +16,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ANYANGRU_CONFIG,
   ANYANGRU_CUSHIONS,
+  COURTYARD_CONFIG,
+  FRONT_CENTER_PRIORITY_CUSHIONS,
   MAX_VISITORS_PER_ROOM
 } from '../src/config/worldConfig.js';
 import { INITIAL_WISHES, WANDERER_POETIC_NAMES } from '../src/config/constants.js';
+
+const { minX: WALK_MIN_X, maxX: WALK_MAX_X, minZ: WALK_MIN_Z, maxZ: WALK_MAX_Z } =
+  COURTYARD_CONFIG.walkBounds.clamp;
+
+function clampServerX(val) {
+  return Math.max(WALK_MIN_X, Math.min(WALK_MAX_X, Number(val)));
+}
+
+function clampServerZ(val) {
+  return Math.max(WALK_MIN_Z, Math.min(WALK_MAX_Z, Number(val)));
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,14 +82,21 @@ function loadPersistedWishes() {
 }
 
 let sharedWishes = loadPersistedWishes();
+let saveWishesTimer = null;
 
 function savePersistedWishes() {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(WISHES_FILE, JSON.stringify(sharedWishes, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[SansaServer] 소원 데이터 저장 실패:', err.message);
-  }
+  if (saveWishesTimer) clearTimeout(saveWishesTimer);
+  saveWishesTimer = setTimeout(async () => {
+    saveWishesTimer = null;
+    try {
+      await fs.promises.mkdir(DATA_DIR, { recursive: true });
+      const tmpFile = `${WISHES_FILE}.tmp`;
+      await fs.promises.writeFile(tmpFile, JSON.stringify(sharedWishes, null, 2), 'utf8');
+      await fs.promises.rename(tmpFile, WISHES_FILE);
+    } catch (err) {
+      console.warn('[SansaServer] 소원 데이터 저장 실패:', err.message);
+    }
+  }, 150);
 }
 
 /* =========================================================================
@@ -163,18 +182,10 @@ function getRoomOccupiedSeats(roomMap, excludeClientId = null) {
   return occupied;
 }
 
-const FRONT_CENTER_PRIORITY_CUSHIONS = [...ANYANGRU_CUSHIONS].sort((a, b) => {
-  if (a.row !== b.row) return a.row - b.row;
-  const distCenterA = Math.abs(a.col - 4);
-  const distCenterB = Math.abs(b.col - 4);
-  if (distCenterA !== distCenterB) return distCenterA - distCenterB;
-  return a.col - b.col;
-});
-
 function assignNearestSeatInRoom(roomMap, clientId, _x = 0, _z = 0) {
   const occupied = getRoomOccupiedSeats(roomMap, clientId);
 
-  // 차경루 가운데 앞자리(1줄 중앙 -> 좌우 -> 2줄 -> 3줄)부터 순차 배정
+  // 차경루 가운데 앞자리(1줄 중앙 -> 좌우 -> 2줄 -> 3줄)부터 순차 배정 (worldConfig.js SSOT)
   for (const c of FRONT_CENTER_PRIORITY_CUSHIONS) {
     if (!occupied.has(c.index)) {
       return c.index;
@@ -286,7 +297,8 @@ function handleClientMessage(session, msg) {
 
     case 'join': {
       const incoming = msg.player || {};
-      session.id = String(incoming.id || session.id);
+      // 기존 방에 속해 있던 소켓의 중복 join 시 유령 세션 방지
+      removeSessionFromCurrentRoom(session);
 
       const preferred = Number.isInteger(msg.preferredRoom) ? msg.preferredRoom : null;
       const assignedRoomId = pickAvailableRoomId(preferred);
@@ -303,8 +315,8 @@ function handleClientMessage(session, msg) {
         id: session.id,
         name: uniqueName,
         paletteIdx: Math.abs(Number(incoming.paletteIdx) || 0) % 4,
-        x: Number.isFinite(incoming.x) ? Number(incoming.x) : 0,
-        z: Number.isFinite(incoming.z) ? Number(incoming.z) : 1.5,
+        x: Number.isFinite(incoming.x) ? clampServerX(incoming.x) : 0,
+        z: Number.isFinite(incoming.z) ? clampServerZ(incoming.z) : 1.5,
         yaw: Number.isFinite(incoming.yaw) ? Number(incoming.yaw) : 0,
         posture: incoming.posture === 'kneel' ? 'kneel' : 'walk',
         seatIndex: null
@@ -321,6 +333,7 @@ function handleClientMessage(session, msg) {
 
       sendJson(session, {
         type: 'welcome',
+        selfId: session.id,
         roomId: assignedRoomId,
         assignedName: uniqueName,
         seatIndex: null,
@@ -391,8 +404,8 @@ function handleClientMessage(session, msg) {
     case 'state': {
       if (!session.roomId || !session.player || !msg.player) return;
       const p = msg.player;
-      if (Number.isFinite(p.x)) session.player.x = Math.max(-25, Math.min(25, Number(p.x)));
-      if (Number.isFinite(p.z)) session.player.z = Math.max(-25, Math.min(25, Number(p.z)));
+      if (Number.isFinite(p.x)) session.player.x = clampServerX(p.x);
+      if (Number.isFinite(p.z)) session.player.z = clampServerZ(p.z);
       if (Number.isFinite(p.yaw)) session.player.yaw = Number(p.yaw);
       if (p.posture === 'walk' || p.posture === 'kneel') {
         session.player.posture = p.posture;
@@ -559,11 +572,27 @@ function handleClientMessage(session, msg) {
 /* =========================================================================
    5. HTTP 정적 서빙 + /api/rooms 상태 조회 + /ws 업그레이드 서버
    ========================================================================= */
+const ALLOWED_STATIC_FILES = new Set(['/index.html', '/styles.css', '/청광사 내부 이미지.jpg']);
+const ALLOWED_STATIC_PREFIXES = ['/src/', '/assets/'];
+
+function isAllowedStaticPath(relPath) {
+  if (ALLOWED_STATIC_FILES.has(relPath)) return true;
+  if (relPath.includes('/.')) return false;
+  return ALLOWED_STATIC_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   const rawUrl = req.url || '/';
-  const pathname = decodeURIComponent(rawUrl.split('?')[0]);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(rawUrl.split('?')[0]);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad Request');
+    return;
+  }
 
   if (pathname === '/api/rooms') {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -580,10 +609,16 @@ const server = http.createServer((req, res) => {
   }
 
   const relPath = pathname === '/' ? '/index.html' : pathname;
-  const resolved = path.resolve(ROOT_DIR, `.${relPath}`);
+  if (!isAllowedStaticPath(relPath)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return;
+  }
 
-  if (!resolved.startsWith(ROOT_DIR)) {
-    res.writeHead(403);
+  const resolved = path.resolve(ROOT_DIR, `.${relPath}`);
+  const relFromRoot = path.relative(ROOT_DIR, resolved);
+  if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Forbidden');
     return;
   }
@@ -648,15 +683,20 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(filePath).pipe(res);
 });
 
+const MAX_CONCURRENT_WS_CLIENTS = 1000;
+const MAX_WS_BUFFER_BYTES = 512 * 1024;
+const MAX_WS_MSGS_PER_SEC = 60;
+
 server.on('upgrade', (req, socket) => {
   const pathname = (req.url || '').split('?')[0];
-  if (pathname !== '/ws') {
+  if (pathname !== '/ws' || allClients.size >= MAX_CONCURRENT_WS_CLIENTS) {
     socket.destroy();
     return;
   }
 
+  const upgradeHeader = String(req.headers.upgrade || '').toLowerCase();
   const secKey = req.headers['sec-websocket-key'];
-  if (!secKey) {
+  if (upgradeHeader !== 'websocket' || !secKey) {
     socket.destroy();
     return;
   }
@@ -680,17 +720,21 @@ server.on('upgrade', (req, socket) => {
   socket.setNoDelay(true);
 
   const session = {
-    id: `conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `conn-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
     socket,
     roomId: null,
     player: null,
     closed: false,
-    lastSeenAt: Date.now()
+    lastSeenAt: Date.now(),
+    msgWindowStart: Date.now(),
+    msgWindowCount: 0
   };
 
   allClients.add(session);
 
   let buffer = Buffer.alloc(0);
+  let fragmentedChunks = [];
+  let fragmentedOpcode = null;
 
   const cleanup = () => {
     if (session.closed) return;
@@ -709,13 +753,24 @@ server.on('upgrade', (req, socket) => {
   };
 
   socket.on('data', (chunk) => {
+    if (buffer.length + chunk.length > MAX_WS_BUFFER_BYTES) {
+      cleanup();
+      return;
+    }
     buffer = Buffer.concat([buffer, chunk]);
 
     while (buffer.length >= 2) {
       const firstByte = buffer[0];
       const secondByte = buffer[1];
+      const isFin = (firstByte & 0x80) !== 0;
       const opcode = firstByte & 0x0f;
       const isMasked = (secondByte & 0x80) !== 0;
+      // RFC 6455: 클라이언트 -> 서버 프레임은 반드시 마스킹되어야 함
+      if (!isMasked) {
+        cleanup();
+        return;
+      }
+
       let payloadLen = secondByte & 0x7f;
       let offset = 2;
 
@@ -734,20 +789,18 @@ server.on('upgrade', (req, socket) => {
         return;
       }
 
-      const maskLen = isMasked ? 4 : 0;
+      const maskLen = 4;
       if (buffer.length < offset + maskLen + payloadLen) {
         return;
       }
 
       let payload = buffer.subarray(offset + maskLen, offset + maskLen + payloadLen);
-      if (isMasked) {
-        const maskKey = buffer.subarray(offset, offset + 4);
-        const unmasked = Buffer.allocUnsafe(payloadLen);
-        for (let i = 0; i < payloadLen; i++) {
-          unmasked[i] = payload[i] ^ maskKey[i & 3];
-        }
-        payload = unmasked;
+      const maskKey = buffer.subarray(offset, offset + 4);
+      const unmasked = Buffer.allocUnsafe(payloadLen);
+      for (let i = 0; i < payloadLen; i++) {
+        unmasked[i] = payload[i] ^ maskKey[i & 3];
       }
+      payload = unmasked;
 
       buffer = buffer.subarray(offset + maskLen + payloadLen);
 
@@ -763,9 +816,44 @@ server.on('upgrade', (req, socket) => {
         }
         continue;
       }
+      if (opcode === 0x0a) {
+        continue;
+      }
+
+      // 분할 프레임(FIN / Continuation 0x00) 재조립
+      let fullTextPayload = null;
       if (opcode === 0x01) {
+        if (isFin) {
+          fullTextPayload = payload;
+        } else {
+          fragmentedOpcode = 0x01;
+          fragmentedChunks = [payload];
+          continue;
+        }
+      } else if (opcode === 0x00 && fragmentedOpcode === 0x01) {
+        fragmentedChunks.push(payload);
+        if (isFin) {
+          fullTextPayload = Buffer.concat(fragmentedChunks);
+          fragmentedChunks = [];
+          fragmentedOpcode = null;
+        } else {
+          continue;
+        }
+      }
+
+      if (fullTextPayload) {
+        const now = Date.now();
+        if (now - session.msgWindowStart >= 1000) {
+          session.msgWindowStart = now;
+          session.msgWindowCount = 0;
+        }
+        session.msgWindowCount += 1;
+        if (session.msgWindowCount > MAX_WS_MSGS_PER_SEC) {
+          continue;
+        }
+
         try {
-          const parsed = JSON.parse(payload.toString('utf8'));
+          const parsed = JSON.parse(fullTextPayload.toString('utf8'));
           handleClientMessage(session, parsed);
         } catch {
           // ignore malformed JSON

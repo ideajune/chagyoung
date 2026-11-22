@@ -5,7 +5,7 @@
 import { LANTERN_COLORS } from '../config/constants.js';
 import { COURTYARD_CONFIG } from '../config/worldConfig.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class PropsManager {
   constructor(sceneManager, materials) {
@@ -31,6 +31,29 @@ export class PropsManager {
     this.sonicRings = [];
     this.hapjangParticles = [];
     this.bellExcitation = 0;
+
+    // 공용 연등·이펙트 지오메트리/재질 캐시 (재빌드 및 FX 반복 생성 시 GPU 누수 방지)
+    const lanternPts = [];
+    for (let i = 0; i <= 14; i++) {
+      const t = i / 14;
+      const y = (t - 0.5) * 0.58;
+      const r = 0.085 + Math.sin(t * Math.PI) * 0.2;
+      lanternPts.push(new C_ENGINE.Vector2(r, y));
+    }
+    this.sharedLanternBodyGeo = new C_ENGINE.LatheGeometry(lanternPts, 24);
+    this.sharedLanternCapGeo = new C_ENGINE.CylinderGeometry(0.13, 0.13, 0.042, 16);
+    this.sharedLanternTagGeo = new C_ENGINE.PlaneGeometry(0.11, 0.36);
+    this.sharedLanternHitGeo = new C_ENGINE.SphereGeometry(0.62, 8, 8);
+    this.sharedLanternHitMat = new C_ENGINE.MeshBasicMaterial({ visible: false });
+    this.sharedLanternCapMat = new C_ENGINE.MeshStandardMaterial({ color: 0x3b281e, roughness: 0.8 });
+    this.sharedLanternTagMat = new C_ENGINE.MeshBasicMaterial({
+      color: 0xf5efe2,
+      side: C_ENGINE.DoubleSide
+    });
+    this.sharedSonicRingGeo = new C_ENGINE.PlaneGeometry(0.55, 0.55);
+    this.sharedHapjangParticleGeo = new C_ENGINE.PlaneGeometry(1, 1);
+    this._lanternDisposableGeos = [];
+    this._lanternDisposableMats = [];
 
     this.sceneManager.onResizeCallback(() => {
       this.cachedContainerRect = null;
@@ -219,6 +242,15 @@ export class PropsManager {
     while (lanternsRoot.children.length > 0) {
       lanternsRoot.remove(lanternsRoot.children[0]);
     }
+    for (const geo of this._lanternDisposableGeos) {
+      geo.dispose?.();
+    }
+    for (const mat of this._lanternDisposableMats) {
+      mat.dispose?.();
+    }
+    this._lanternDisposableGeos = [];
+    this._lanternDisposableMats = [];
+
     this.lanternMeshes = [];
     this.interactiveTargets = [
       ...this.interactiveTargets.filter((obj) => obj.userData?.type === 'windbell'),
@@ -231,19 +263,13 @@ export class PropsManager {
     const total = spaceWishes.length;
     if (total === 0) return;
 
-    const lanternPts = [];
-    for (let i = 0; i <= 14; i++) {
-      const t = i / 14;
-      const y = (t - 0.5) * 0.58;
-      const r = 0.085 + Math.sin(t * Math.PI) * 0.2;
-      lanternPts.push(new C_ENGINE.Vector2(r, y));
-    }
-    const bodyGeo = new C_ENGINE.LatheGeometry(lanternPts, 24);
-    const capGeo = new C_ENGINE.CylinderGeometry(0.13, 0.13, 0.042, 16);
-    const tagGeo = new C_ENGINE.PlaneGeometry(0.11, 0.36);
-    const hitSphereGeo = new C_ENGINE.SphereGeometry(0.62, 8, 8);
-    const hitSphereMat = new C_ENGINE.MeshBasicMaterial({ visible: false });
-    const darkCapMat = new C_ENGINE.MeshStandardMaterial({ color: 0x3b281e, roughness: 0.8 });
+    const bodyGeo = this.sharedLanternBodyGeo;
+    const capGeo = this.sharedLanternCapGeo;
+    const tagGeo = this.sharedLanternTagGeo;
+    const hitSphereGeo = this.sharedLanternHitGeo;
+    const hitSphereMat = this.sharedLanternHitMat;
+    const darkCapMat = this.sharedLanternCapMat;
+    const tagMat = this.sharedLanternTagMat;
 
     const hang = COURTYARD_CONFIG.lanternHang;
 
@@ -259,10 +285,9 @@ export class PropsManager {
       pivot.position.set(x, y, z);
 
       const cordLen = 0.38 + (idx % 3) * 0.1;
-      const cordMesh = new C_ENGINE.Mesh(
-        new C_ENGINE.CylinderGeometry(0.009, 0.009, cordLen, 6),
-        this.materials.matBronze
-      );
+      const cordGeo = new C_ENGINE.CylinderGeometry(0.009, 0.009, cordLen, 6);
+      this._lanternDisposableGeos.push(cordGeo);
+      const cordMesh = new C_ENGINE.Mesh(cordGeo, this.materials.matBronze);
       cordMesh.position.y = -cordLen * 0.5;
       pivot.add(cordMesh);
 
@@ -280,6 +305,7 @@ export class PropsManager {
         emissiveIntensity: isSelected ? 0.55 : 0.28,
         roughness: 0.65
       });
+      this._lanternDisposableMats.push(bodyMat);
 
       const lanternData = {
         type: 'lantern',
@@ -309,10 +335,6 @@ export class PropsManager {
       botCap.position.y = lanternCenterY - 0.29;
       pivot.add(botCap);
 
-      const tagMat = new C_ENGINE.MeshBasicMaterial({
-        color: 0xf5efe2,
-        side: C_ENGINE.DoubleSide
-      });
       const tagMesh = new C_ENGINE.Mesh(tagGeo, tagMat);
       tagMesh.position.y = lanternCenterY - 0.52;
       tagMesh.userData = lanternData;
@@ -339,10 +361,20 @@ export class PropsManager {
     return found ? found.bodyMesh.userData.worldPos : null;
   }
 
+  /**
+   * 연등 선택/해제 시 전체 재빌드 없이 발광 강도만 부분 업데이트
+   */
+  setActiveLantern(activeWishId) {
+    for (const l of this.lanternMeshes) {
+      if (l.bodyMesh?.material) {
+        l.bodyMesh.material.emissiveIntensity = l.wishId === activeWishId ? 0.55 : 0.28;
+      }
+    }
+  }
+
   exciteWindBell() {
     this.bellExcitation = 1.0;
 
-    const ringGeo = new C_ENGINE.PlaneGeometry(0.55, 0.55);
     const ringMat = new C_ENGINE.MeshBasicMaterial({
       map: this.materials.glowTex,
       color: 0xfbbf24,
@@ -352,7 +384,7 @@ export class PropsManager {
       blending: C_ENGINE.AdditiveBlending,
       depthWrite: false
     });
-    const ringMesh = new C_ENGINE.Mesh(ringGeo, ringMat);
+    const ringMesh = new C_ENGINE.Mesh(this.sharedSonicRingGeo, ringMat);
     ringMesh.position.copy(this.windBellPivot.position).add(new C_ENGINE.Vector3(0, -0.65, 0));
     this.sceneManager.fxRoot.add(ringMesh);
     this.sonicRings.push({ mesh: ringMesh, mat: ringMat, scale: 1, alpha: 0.9 });
@@ -364,7 +396,7 @@ export class PropsManager {
       ? targetLantern.bodyMesh.userData.worldPos.clone()
       : new C_ENGINE.Vector3(0, 3.6, -15.8);
 
-    const particleGeo = new C_ENGINE.PlaneGeometry(1, 1);
+    const particleGeo = this.sharedHapjangParticleGeo;
     const cameraPos = this.sceneManager.camera.position;
 
     for (let i = 0; i < 28; i++) {
@@ -517,6 +549,7 @@ export class PropsManager {
       r.mat.opacity = Math.max(0, r.alpha);
       if (r.alpha <= 0) {
         fxRoot.remove(r.mesh);
+        r.mat.dispose?.();
         this.sonicRings.splice(i, 1);
       }
     }
@@ -532,6 +565,7 @@ export class PropsManager {
       p.mat.opacity = Math.max(0, p.alpha);
       if (p.alpha <= 0) {
         fxRoot.remove(p.sprite);
+        p.mat.dispose?.();
         this.hapjangParticles.splice(i, 1);
       }
     }

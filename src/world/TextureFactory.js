@@ -4,7 +4,7 @@
 
 import { LANTERN_COLORS } from '../config/constants.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class TextureFactory {
   /**
@@ -993,5 +993,28 @@ export class TextureFactory {
       wainscotTex,
       hwabangWallTex
     };
+  }
+
+  /**
+   * 청풍교·소원정 등 원정/교량용 소형 목제 현판 공용 텍스처 생성
+   */
+  static createSimplePlaqueTexture(text) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 160;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#2b1b12';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#c89b54';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    ctx.fillStyle = '#f5dfb3';
+    ctx.font = 'bold 74px "Noto Serif KR", serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, canvas.width * 0.5, canvas.height * 0.52);
+    const tex = new C_ENGINE.CanvasTexture(canvas);
+    tex.colorSpace = C_ENGINE.SRGBColorSpace;
+    return tex;
   }
 }

@@ -17,7 +17,7 @@ import { MultiplayerClient } from './network/MultiplayerClient.js';
 
 function bootstrapApp() {
   const container = document.getElementById('webgl-container');
-  if (!container || !window.SANSA_CORE) return;
+  if (!container) return;
 
   // 1. 코어 3D 씬 매니저 및 카메라 컨트롤러 초기화
   const sceneManager = new SceneManager(container);
@@ -158,10 +158,8 @@ function bootstrapApp() {
       canToggleZen: () => !hudController.isWriteModalOpen(),
       onToggleZen: () => hudController.toggleZenMode(),
       onDropCustomPhoto: (url) => {
-        if (window.applyCustomBuseoksaPhoto) {
-          window.applyCustomBuseoksaPhoto(url);
-          hudController.showToast('📷 직접 찍으신 실사 사진이 3D 원경 배경에 적용되었습니다!');
-        }
+        sceneManager.applyCustomPanorama(url);
+        hudController.showToast('📷 직접 찍으신 실사 사진이 3D 원경 배경에 적용되었습니다!');
       }
     }
   });

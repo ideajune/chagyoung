@@ -4,7 +4,7 @@
 
 import { MURYANGSUJEON_CONFIG } from '../config/worldConfig.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from './CoreRuntime.js';
 
 export class CameraController {
   constructor(sceneManager) {
@@ -423,14 +423,14 @@ export class CameraController {
       desiredCamY = Math.min(desiredCamY, 5.45);
     }
 
-    // 1) 청풍사 겹처마·현판 하단 여유 고도 소프트 클램프 (처마 범위 z>=3.15 진입 시에만 작동하여 앞마당 부감 시점 보존)
+    // 1) 청풍사 겹처마·현판 하단 여유 고도 소프트 클램프 (MURYANGSUJEON_CONFIG SSOT 기준)
     const muryangEaveWeight = this.computeSmoothRectWeight(
       desiredCamX,
       desiredCamZ,
       -19.1,
       19.1,
-      3.15,
-      17.75,
+      MURYANGSUJEON_CONFIG.stylobateMinZ - 2.35,
+      MURYANGSUJEON_CONFIG.stylobateMaxZ + 2.25,
       0.60
     );
     if (muryangEaveWeight > 0 && desiredCamY > 3.92) {
@@ -459,8 +459,13 @@ export class CameraController {
       const sideDist = Math.max(0, Math.abs(desiredCamX) - 22.0);
       floorY = -0.82 + Math.min(7.5, Math.pow(sideDist * 0.075, 1.35) * 4.4);
     }
-    if (Math.abs(desiredCamX) < 17.2 && desiredCamZ >= 5.4 && desiredCamZ <= 15.8) {
-      floorY = Math.max(floorY, 0.20);
+    if (
+      desiredCamX >= MURYANGSUJEON_CONFIG.stylobateMinX - 0.4 &&
+      desiredCamX <= MURYANGSUJEON_CONFIG.stylobateMaxX + 0.4 &&
+      desiredCamZ >= MURYANGSUJEON_CONFIG.stylobateMinZ &&
+      desiredCamZ <= MURYANGSUJEON_CONFIG.stylobateMaxZ
+    ) {
+      floorY = Math.max(floorY, MURYANGSUJEON_CONFIG.verandaY);
     } else if (Math.abs(desiredCamX) < 16.5 && desiredCamZ >= -23.8 && desiredCamZ <= -15.2) {
       floorY = Math.max(floorY, 0.08);
     }
@@ -497,8 +502,14 @@ export class CameraController {
     this.pitchOffset += (this.targetPitchOffset - this.pitchOffset) * damp;
     this.zoomOffset += (this.targetZoomOffset - this.zoomOffset) * damp;
 
-    const viewDir = this.camLook.clone().sub(this.camPos).normalize();
-    const finalPos = this.camPos.clone().addScaledVector(viewDir, -this.zoomOffset);
+    if (!this._tmpViewDir) {
+      this._tmpViewDir = new C_ENGINE.Vector3();
+      this._tmpFinalPos = new C_ENGINE.Vector3();
+      this._tmpFinalLook = new C_ENGINE.Vector3();
+    }
+
+    const viewDir = this._tmpViewDir.copy(this.camLook).sub(this.camPos).normalize();
+    const finalPos = this._tmpFinalPos.copy(this.camPos).addScaledVector(viewDir, -this.zoomOffset);
     finalPos.x += Math.sin(elapsed * 0.45) * 0.035;
     finalPos.y += Math.cos(elapsed * 0.38) * 0.025;
 
@@ -506,7 +517,7 @@ export class CameraController {
     const baseYaw = Math.atan2(viewDir.x, viewDir.z) + this.yawOffset;
     const basePitch = Math.asin(Math.max(-0.95, Math.min(0.95, viewDir.y))) + this.pitchOffset;
 
-    const finalLook = new C_ENGINE.Vector3(
+    const finalLook = this._tmpFinalLook.set(
       finalPos.x + Math.sin(baseYaw) * Math.cos(basePitch) * lookDist,
       finalPos.y + Math.sin(basePitch) * lookDist,
       finalPos.z + Math.cos(baseYaw) * Math.cos(basePitch) * lookDist

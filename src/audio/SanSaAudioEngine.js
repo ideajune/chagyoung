@@ -370,11 +370,17 @@ export class SanSaAudioEngine {
       }
       this.updateContinuousVolumes();
       this.startBellRepeatCycle();
-      this.scheduleNextAutoBell();
       this.scheduleNextBirdSong(4500);
     } catch {
       this.needsGestureUnlock = true;
     }
+
+    const gestureEvents = ['pointerdown', 'touchstart', 'keydown', 'click'];
+    const removeGestureListeners = () => {
+      gestureEvents.forEach((evt) => {
+        window.removeEventListener(evt, unlockOnFirstGesture);
+      });
+    };
 
     const unlockOnFirstGesture = () => {
       if (!this.isPlaying) return;
@@ -400,9 +406,12 @@ export class SanSaAudioEngine {
           this.bellLoopAudio.play().catch(() => {});
         }
       }
+      if (this.ctx && this.ctx.state === 'running' && !this.needsGestureUnlock) {
+        removeGestureListeners();
+      }
     };
 
-    ['pointerdown', 'touchstart', 'keydown', 'click'].forEach((evt) => {
+    gestureEvents.forEach((evt) => {
       window.addEventListener(evt, unlockOnFirstGesture, { passive: true });
     });
   }
@@ -418,7 +427,6 @@ export class SanSaAudioEngine {
     if (this.isPlaying) {
       this.bellOnceAudio?.pause();
       this.startBellRepeatCycle();
-      this.scheduleNextAutoBell();
       this.scheduleNextBirdSong(3500);
     } else {
       this.stopBellRepeatCycle();

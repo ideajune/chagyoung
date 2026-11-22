@@ -5,8 +5,9 @@
  */
 
 import { YEONHWAJI_CONFIG, getCheongpungBridgeY } from '../config/worldConfig.js';
+import { TextureFactory } from './TextureFactory.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class YeonhwajiBuilder {
   constructor(materials, isMobile = false) {
@@ -664,23 +665,7 @@ export class YeonhwajiBuilder {
   }
 
   createPlaqueTexture(text) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 160;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#2b1b12';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#c89b54';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-    ctx.fillStyle = '#f5dfb3';
-    ctx.font = 'bold 74px "Noto Serif KR", serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, canvas.width * 0.5, canvas.height * 0.52);
-    const tex = new C_ENGINE.CanvasTexture(canvas);
-    tex.colorSpace = C_ENGINE.SRGBColorSpace;
-    return tex;
+    return TextureFactory.createSimplePlaqueTexture(text);
   }
 
   buildSwimmingFish(group) {
@@ -890,22 +875,19 @@ export class YeonhwajiBuilder {
   update(elapsed, _dt) {
     this.waterTimeUniform.value = elapsed;
 
-    // 1. 코이 비단잉어 S자 유영 및 바닥 그림자 동기화
+    // 1. 코이 비단잉어 S자 유영 및 바닥 그림자 동기화 (Zero-Allocation 스칼라 계산)
     for (const f of this.fishList) {
       const t = elapsed * f.speed + f.phase;
       const tNext = t + 0.03 * Math.sign(f.speed);
 
-      const calcPos = (ang) => ({
-        x: f.cx + Math.cos(ang) * f.orbitRx + Math.sin(ang * 2.0) * f.wobbleAmp,
-        z: f.cz + Math.sin(ang) * f.orbitRz + Math.cos(ang * 1.5) * f.wobbleAmp * 0.6
-      });
-
-      const p0 = calcPos(t);
-      const p1 = calcPos(tNext);
+      const p0x = f.cx + Math.cos(t) * f.orbitRx + Math.sin(t * 2.0) * f.wobbleAmp;
+      const p0z = f.cz + Math.sin(t) * f.orbitRz + Math.cos(t * 1.5) * f.wobbleAmp * 0.6;
+      const p1x = f.cx + Math.cos(tNext) * f.orbitRx + Math.sin(tNext * 2.0) * f.wobbleAmp;
+      const p1z = f.cz + Math.sin(tNext) * f.orbitRz + Math.cos(tNext * 1.5) * f.wobbleAmp * 0.6;
       const y = f.baseDepth + Math.sin(elapsed * 1.35 + f.phase) * 0.055;
-      const heading = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      const heading = Math.atan2(p1x - p0x, p1z - p0z);
 
-      f.group.position.set(p0.x, y, p0.z);
+      f.group.position.set(p0x, y, p0z);
       f.group.rotation.y = heading;
 
       const wag = Math.sin(elapsed * f.tailSpeed + f.phase);
@@ -914,8 +896,8 @@ export class YeonhwajiBuilder {
       f.leftFin.rotation.y = 0.45 + wag * 0.16;
       f.rightFin.rotation.y = -0.45 + wag * 0.16;
 
-      f.shadowMesh.position.x = p0.x + 0.12;
-      f.shadowMesh.position.z = p0.z + 0.12;
+      f.shadowMesh.position.x = p0x + 0.12;
+      f.shadowMesh.position.z = p0z + 0.12;
       f.shadowMesh.rotation.y = heading;
     }
 

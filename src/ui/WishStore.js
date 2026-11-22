@@ -160,16 +160,16 @@ export class WishStore {
       now.getDate()
     ).padStart(2, '0')}`;
 
-    const newWish = sanitizeWishItem({
+    const newWish = {
       id: `wish-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       space: 'cheongpungsa',
       color: color || 'amber',
-      author: author || '산사 나그네',
+      author: String(author || '산사 나그네').trim() || '산사 나그네',
       tag: tag || '마음 평안',
-      text,
+      text: String(text || '').trim(),
       date: dateStr,
       hapjang: 1
-    });
+    };
 
     this.wishes.push(newWish);
     this.saveWishes();

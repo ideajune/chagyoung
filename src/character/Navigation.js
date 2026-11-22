@@ -11,10 +11,13 @@ import {
   SPACE_OBSTACLES,
   YEONHWAJI_CONFIG,
   WISH_GARDEN_CONFIG,
-  getCheongpungBridgeY
+  getCheongpungBridgeY,
+  getAnyangruCushionByIndex,
+  selectPriorityAnyangruCushion
 } from '../config/worldConfig.js';
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
-const C_ENGINE = window.SANSA_CORE;
+export { getAnyangruCushionByIndex, selectPriorityAnyangruCushion };
 
 export function getGroundHeightAt(x, z) {
   const groundY = COURTYARD_CONFIG.groundY;
@@ -87,8 +90,8 @@ export function getGroundHeightAt(x, z) {
     return ANYANGRU_CONFIG.worldDeckY;
   }
 
-  // 4. 안양루 중앙 돌계단 (-15.55 < z < -13.65)
-  if (z < ANYANGRU_CONFIG.stepsStartZ && z > ANYANGRU_CONFIG.stepsEndZ) {
+  // 4. 안양루 중앙 돌계단 (-15.55 < z < -13.65, 계단 폭 |x| <= 3.1)
+  if (Math.abs(x) <= 3.1 && z < ANYANGRU_CONFIG.stepsStartZ && z > ANYANGRU_CONFIG.stepsEndZ) {
     const t =
       (ANYANGRU_CONFIG.stepsStartZ - z) /
       (ANYANGRU_CONFIG.stepsStartZ - ANYANGRU_CONFIG.stepsEndZ);
@@ -269,25 +272,28 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null, allowedSeats =
       }
     }
 
-    for (const c of obs.circles) {
-      const dx = cx - c.x;
-      const dz = cz - c.z;
+    const pushOutFromCircle = (ox, oz, radius, pushPad = 0.015, fallbackDirZ = 1) => {
+      const dx = cx - ox;
+      const dz = cz - oz;
       const distSq = dx * dx + dz * dz;
-      if (distSq < c.r * c.r) {
-        const dist = Math.sqrt(distSq);
-        if (dist > 0.0001) {
-          cx = c.x + (dx / dist) * (c.r + 0.01);
-          cz = c.z + (dz / dist) * (c.r + 0.01);
-        } else if (prevX !== null && prevZ !== null) {
-          const pdx = prevX - c.x;
-          const pdz = prevZ - c.z;
-          const pLen = Math.hypot(pdx, pdz) || 1;
-          cx = c.x + (pdx / pLen) * (c.r + 0.02);
-          cz = c.z + (pdz / pLen) * (c.r + 0.02);
-        } else {
-          cz = c.z - (c.r + 0.02);
-        }
+      if (distSq >= radius * radius) return;
+      const dist = Math.sqrt(distSq);
+      if (dist > 0.0001) {
+        cx = ox + (dx / dist) * (radius + pushPad);
+        cz = oz + (dz / dist) * (radius + pushPad);
+      } else if (prevX !== null && prevZ !== null) {
+        const pdx = prevX - ox;
+        const pdz = prevZ - oz;
+        const pLen = Math.hypot(pdx, pdz) || 1;
+        cx = ox + (pdx / pLen) * (radius + 0.02);
+        cz = oz + (pdz / pLen) * (radius + 0.02);
+      } else {
+        cz = oz + fallbackDirZ * (radius + 0.02);
       }
+    };
+
+    for (const c of obs.circles) {
+      pushOutFromCircle(c.x, c.z, c.r, 0.01, -1);
     }
 
     if (obs.ponds) {
@@ -312,24 +318,7 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null, allowedSeats =
     if (cz <= ANYANGRU_CONFIG.stepsEndZ + 0.5) {
       for (const c of ANYANGRU_CUSHIONS) {
         if (isSeatAllowed(c.index, allowedSeats)) continue;
-        const dx = cx - c.x;
-        const dz = cz - c.z;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < CUSHION_AVOID_RADIUS * CUSHION_AVOID_RADIUS) {
-          const dist = Math.sqrt(distSq);
-          if (dist > 0.0001) {
-            cx = c.x + (dx / dist) * (CUSHION_AVOID_RADIUS + 0.015);
-            cz = c.z + (dz / dist) * (CUSHION_AVOID_RADIUS + 0.015);
-          } else if (prevX !== null && prevZ !== null) {
-            const pdx = prevX - c.x;
-            const pdz = prevZ - c.z;
-            const pLen = Math.hypot(pdx, pdz) || 1;
-            cx = c.x + (pdx / pLen) * (CUSHION_AVOID_RADIUS + 0.02);
-            cz = c.z + (pdz / pLen) * (CUSHION_AVOID_RADIUS + 0.02);
-          } else {
-            cz = c.z + (CUSHION_AVOID_RADIUS + 0.02);
-          }
-        }
+        pushOutFromCircle(c.x, c.z, CUSHION_AVOID_RADIUS, 0.015, 1);
       }
     }
 
@@ -338,29 +327,15 @@ export function clampWalkableXZ(x, z, prevX = null, prevZ = null, allowedSeats =
     if (hallCushions && cz >= 7.0 && cz <= 30.0) {
       for (const c of hallCushions) {
         if (isHallSeatAllowed(c.index, allowedSeats)) continue;
-        const dx = cx - c.x;
-        const dz = cz - c.z;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < HALL_CUSHION_AVOID_RADIUS * HALL_CUSHION_AVOID_RADIUS) {
-          const dist = Math.sqrt(distSq);
-          if (dist > 0.0001) {
-            cx = c.x + (dx / dist) * (HALL_CUSHION_AVOID_RADIUS + 0.015);
-            cz = c.z + (dz / dist) * (HALL_CUSHION_AVOID_RADIUS + 0.015);
-          } else if (prevX !== null && prevZ !== null) {
-            const pdx = prevX - c.x;
-            const pdz = prevZ - c.z;
-            const pLen = Math.hypot(pdx, pdz) || 1;
-            cx = c.x + (pdx / pLen) * (HALL_CUSHION_AVOID_RADIUS + 0.02);
-            cz = c.z + (pdz / pLen) * (HALL_CUSHION_AVOID_RADIUS + 0.02);
-          } else {
-            cz = c.z + (HALL_CUSHION_AVOID_RADIUS + 0.02);
-          }
-        }
+        pushOutFromCircle(c.x, c.z, HALL_CUSHION_AVOID_RADIUS, 0.015, 1);
       }
     }
 
     cx = Math.max(minX, Math.min(maxX, cx));
     cz = Math.max(minZ, Math.min(maxZ, cz));
+    if (cz < anyangruMaxZ) {
+      cx = Math.max(-anyangruHalfX, Math.min(anyangruHalfX, cx));
+    }
   }
 
   return { x: cx, z: cz };
@@ -393,12 +368,48 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ, allowedSeats 
   const gScore = new Map();
   const cameFrom = new Map();
   const closed = new Set();
-  const open = [];
+
+  // Binary Min-Heap (O(N log N) A* 탐색)
+  const heap = [];
+  const pushHeap = (node) => {
+    heap.push(node);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (heap[parent].f <= heap[i].f) break;
+      const tmp = heap[parent];
+      heap[parent] = heap[i];
+      heap[i] = tmp;
+      i = parent;
+    }
+  };
+  const popHeap = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      const len = heap.length;
+      while (true) {
+        const left = (i << 1) + 1;
+        const right = left + 1;
+        let smallest = i;
+        if (left < len && heap[left].f < heap[smallest].f) smallest = left;
+        if (right < len && heap[right].f < heap[smallest].f) smallest = right;
+        if (smallest === i) break;
+        const tmp = heap[i];
+        heap[i] = heap[smallest];
+        heap[smallest] = tmp;
+        i = smallest;
+      }
+    }
+    return top;
+  };
 
   const startKey = keyOf(startNode.gx, startNode.gz);
   const goalKey = keyOf(goalNode.gx, goalNode.gz);
   gScore.set(startKey, 0);
-  open.push({
+  pushHeap({
     gx: startNode.gx,
     gz: startNode.gz,
     key: startKey,
@@ -420,13 +431,9 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ, allowedSeats 
   let bestDistToGoal = Math.hypot(goalNode.gx - startNode.gx, goalNode.gz - startNode.gz);
   let iterations = 0;
 
-  while (open.length > 0 && iterations < 14000) {
+  while (heap.length > 0 && iterations < 14000) {
     iterations++;
-    let bestIdx = 0;
-    for (let i = 1; i < open.length; i++) {
-      if (open[i].f < open[bestIdx].f) bestIdx = i;
-    }
-    const current = open.splice(bestIdx, 1)[0];
+    const current = popHeap();
     if (current.key === goalKey) {
       bestKey = goalKey;
       break;
@@ -470,7 +477,7 @@ export function findObstacleFreePath(startX, startZ, goalX, goalZ, allowedSeats 
         cameFrom.set(nKey, current.key);
         gScore.set(nKey, tentativeG);
         const h = Math.hypot(goalNode.gx - nx, goalNode.gz - nz);
-        open.push({ gx: nx, gz: nz, key: nKey, f: tentativeG + h });
+        pushHeap({ gx: nx, gz: nz, key: nKey, f: tentativeG + h });
       }
     }
   }
@@ -610,47 +617,6 @@ export function buildWalkPath(startPos, endPos, targetSeat = null) {
   }
 
   return points;
-}
-
-export function getAnyangruCushionByIndex(seatIndex) {
-  if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex >= ANYANGRU_CUSHIONS.length) {
-    return null;
-  }
-  return ANYANGRU_CUSHIONS[seatIndex] || null;
-}
-
-// 가운데 앞자리(1줄 중앙 -> 좌우 -> 2줄 중앙 -> 좌우 -> 3줄 중앙 -> 좌우) 우선순위 정렬
-const FRONT_CENTER_PRIORITY_CUSHIONS = [...ANYANGRU_CUSHIONS].sort((a, b) => {
-  if (a.row !== b.row) return a.row - b.row;
-  const distCenterA = Math.abs(a.col - 4);
-  const distCenterB = Math.abs(b.col - 4);
-  if (distCenterA !== distCenterB) return distCenterA - distCenterB;
-  return a.col - b.col;
-});
-
-/**
- * 차경루 가운데 앞자리(1줄 중앙)부터 순차적으로 비어 있는 방석을 탐색합니다.
- * - occupiedSeatIndices에 포함된 좌석(다른 나그네 착석/이동 중)은 제외합니다.
- * - 21석이 모두 점유된 경우 { cushion: null, dist: Infinity }를 반환합니다.
- */
-export function selectPriorityAnyangruCushion(x, z, occupiedSeatIndices = new Set()) {
-  const occupied =
-    occupiedSeatIndices instanceof Set
-      ? occupiedSeatIndices
-      : new Set(occupiedSeatIndices || []);
-
-  for (const c of FRONT_CENTER_PRIORITY_CUSHIONS) {
-    if (occupied.has(c.index)) continue;
-    return {
-      cushion: c,
-      dist: Math.hypot(x - c.x, z - c.z)
-    };
-  }
-
-  return {
-    cushion: null,
-    dist: Infinity
-  };
 }
 
 export function findNearestAnyangruCushion(

@@ -12,13 +12,13 @@ import {
 import {
   MURYANGSUJEON_CONFIG,
   ANYANGRU_CONFIG,
-  ANYANGRU_CUSHIONS
+  ANYANGRU_CUSHIONS,
+  COURTYARD_CONFIG
 } from '../config/worldConfig.js';
 import {
   equipWandererActor,
   applyWiderWalkingStride,
-  applyWandererPalette,
-  createWandererBubbleSprite
+  applyWandererPalette
 } from './WandererActor.js';
 import {
   getGroundHeightAt,
@@ -29,7 +29,9 @@ import {
   selectPriorityAnyangruCushion
 } from './Navigation.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { loadWandererProfile, saveWandererProfile } from './PlayerProfileStore.js';
+import { VisitorLabelOverlay } from './VisitorLabelOverlay.js';
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class WandererManager {
   constructor(sceneManager, cameraController, callbacks = {}) {
@@ -54,10 +56,9 @@ export class WandererManager {
     this.multiplayerClient = null;
     this.occupiedSeatIndex = null;
     this.seatRequestInFlight = false;
-    this.revealedNpc = null;
-    this.revealedNpcUntil = 0;
-    this.activeBubbles = [];
+    this.labelOverlay = new VisitorLabelOverlay(sceneManager);
     this.greetingRipples = [];
+    this.sharedRippleGeo = new C_ENGINE.RingGeometry(0.18, 0.26, 40);
 
     this.mobileMoveSpeed = 2.42;
     this.pcMoveSpeed = Number((2.42 * 1.3).toFixed(3)); // PC 보행 속도 30% 상향 (3.146)
@@ -91,45 +92,11 @@ export class WandererManager {
   }
 
   loadProfile() {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.WANDERER_PROFILE);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (
-          parsed &&
-          typeof parsed.name === 'string' &&
-          WANDERER_POETIC_NAMES.includes(parsed.name) &&
-          typeof parsed.paletteIdx === 'number'
-        ) {
-          return {
-            name: parsed.name,
-            paletteIdx: parsed.v2Palette ? Math.abs(parsed.paletteIdx) % WANDERER_PALETTES.length : 0
-          };
-        }
-      }
-    } catch {
-      // localStorage 접근 불가 시 폴백
-    }
-
-    const randomIdx = Math.floor(Math.random() * WANDERER_POETIC_NAMES.length);
-    const initial = {
-      name: WANDERER_POETIC_NAMES[randomIdx],
-      paletteIdx: 0 // 기본 연옥빛 풍류 도포(시안 1)
-    };
-    try {
-      localStorage.setItem(STORAGE_KEYS.WANDERER_PROFILE, JSON.stringify(initial));
-    } catch {
-      // ignore
-    }
-    return initial;
+    return loadWandererProfile();
   }
 
   saveProfile() {
-    try {
-      localStorage.setItem(STORAGE_KEYS.WANDERER_PROFILE, JSON.stringify(this.profile));
-    } catch {
-      // ignore
-    }
+    saveWandererProfile(this.profile);
   }
 
   get currentPalette() {
@@ -176,8 +143,8 @@ export class WandererManager {
   applyAssignedProfile({ name }) {
     if (!name || typeof name !== 'string') return;
     this.profile.name = name;
-    if (this.selfLabel?.nameSpan) {
-      this.selfLabel.nameSpan.textContent = name;
+    if (this.labelOverlay.selfLabel?.nameSpan) {
+      this.labelOverlay.selfLabel.nameSpan.textContent = name;
     }
     this.notifySeatStateChanged();
   }
@@ -356,25 +323,12 @@ export class WandererManager {
     const entry = this.remotePlayers.get(peerId);
     if (!entry) return;
 
-    for (let i = this.activeBubbles.length - 1; i >= 0; i--) {
-      const b = this.activeBubbles[i];
-      if (b.parent === entry.actor?.group) {
-        b.parent.remove(b.sprite);
-        b.sprite.material.map?.dispose();
-        b.sprite.material.dispose();
-        this.activeBubbles.splice(i, 1);
-      }
-    }
-
     if (entry.actor?.group) {
       this.rootGroup.remove(entry.actor.group);
     }
     entry.actor?.destroy?.();
     entry.labelObj?.el?.remove();
-
-    if (this.revealedNpc === entry) {
-      this.revealedNpc = null;
-    }
+    this.labelOverlay.clearIfRevealed(entry);
 
     this.remotePlayers.delete(peerId);
     this.syncNpcVisibility();
@@ -556,150 +510,26 @@ export class WandererManager {
   }
 
   createVisitorLabelElement(nameText, isSelf) {
-    if (!this.visitorLabelContainer) return null;
-    const el = document.createElement('div');
-    el.className = isSelf ? 'visitor-label is-self' : 'visitor-label';
-    el.hidden = !isSelf;
-    if (isSelf) {
-      const meBadge = document.createElement('span');
-      meBadge.className = 'visitor-label-me';
-      meBadge.textContent = '나';
-      el.appendChild(meBadge);
-    }
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'visitor-label-name';
-    nameSpan.textContent = nameText;
-    el.appendChild(nameSpan);
-    this.visitorLabelContainer.appendChild(el);
-    return { el, nameSpan };
+    return this.labelOverlay.createLabelElement(nameText, isSelf);
   }
 
   initVisitorLabels() {
-    let container = document.getElementById('visitor-labels');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'visitor-labels';
-      container.className = 'visitor-labels';
-      container.setAttribute('aria-hidden', 'true');
-      document.getElementById('app-stage')?.appendChild(container);
-    }
-    container.innerHTML = '';
-    this.visitorLabelContainer = container;
-    this.labelProjVec = new C_ENGINE.Vector3();
-
-    this.selfLabel = this.createVisitorLabelElement(this.profile.name, true);
-    this.npcWanderers.forEach((npc) => {
-      npc.labelObj = this.createVisitorLabelElement(npc.name, false);
-    });
-    this.remotePlayers.forEach((peer) => {
-      peer.labelObj = this.createVisitorLabelElement(peer.name, false);
-    });
+    this.labelOverlay.reset(this.profile.name, this.npcWanderers, this.remotePlayers);
   }
 
   revealNpcLabel(npc, durationMs = 3000) {
     if (!npc) return;
-    this.revealedNpc = npc;
-    this.revealedNpcUntil = performance.now() + durationMs;
+    this.labelOverlay.reveal(npc, durationMs);
     this.updateVisitorLabels();
   }
 
   updateVisitorLabels() {
-    if (!this.visitorLabelContainer || !this.camera) return;
-    const vw = this.sceneManager.width || window.innerWidth;
-    const vh = this.sceneManager.height || window.innerHeight;
-    if (vw <= 0 || vh <= 0) return;
-
-    const now = performance.now();
-    if (this.revealedNpc && now >= this.revealedNpcUntil) {
-      this.revealedNpc = null;
-    }
-
-    const projectActorHatTop = (actor, labelObj, isSelf, opacity = 1.0, isKneeling = false) => {
-      if (!actor || !actor.group || !labelObj || !actor.group.visible) {
-        if (labelObj?.el) labelObj.el.hidden = true;
-        return;
-      }
-
-      actor.group.updateWorldMatrix(true, true);
-
-      if (!actor.cachedHeadBone) {
-        actor.cachedHeadBone = actor.group.getObjectByName('head') || null;
-      }
-
-      const pt = this.labelProjVec;
-      if (actor.satgatTopAnchor) {
-        actor.satgatTopAnchor.getWorldPosition(pt);
-        pt.y += 0.06;
-      } else if (actor.cachedHeadBone) {
-        actor.cachedHeadBone.getWorldPosition(pt);
-        pt.y += 0.64;
-      } else {
-        actor.group.getWorldPosition(pt);
-        pt.y += isKneeling ? 1.44 : 1.88;
-      }
-
-      const dist = this.camera.position.distanceTo(pt);
-      if (!isSelf && dist > 54) {
-        labelObj.el.hidden = true;
-        return;
-      }
-
-      pt.project(this.camera);
-      if (pt.z < -1 || pt.z > 1) {
-        labelObj.el.hidden = true;
-        return;
-      }
-      if (!isSelf && (Math.abs(pt.x) > 1.05 || Math.abs(pt.y) > 1.05)) {
-        labelObj.el.hidden = true;
-        return;
-      }
-
-      let sx = (pt.x * 0.5 + 0.5) * vw;
-      let sy = (-pt.y * 0.5 + 0.5) * vh;
-
-      if (isSelf) {
-        sx = Math.max(54, Math.min(vw - 54, sx));
-        sy = Math.max(38, Math.min(vh - 38, sy));
-      }
-
-      labelObj.el.hidden = false;
-      labelObj.el.style.opacity = opacity.toFixed(2);
-      labelObj.el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%, -100%)`;
-    };
-
-    if (this.selfLabel) {
-      if (this.selfLabel.nameSpan.textContent !== this.profile.name) {
-        this.selfLabel.nameSpan.textContent = this.profile.name;
-      }
-      projectActorHatTop(this.selfActor, this.selfLabel, true, 1.0, this.posture === 'kneel');
-    }
-
-    this.npcWanderers.forEach((npc) => {
-      if (!npc.labelObj) return;
-      if (this.revealedNpc === npc && now < this.revealedNpcUntil) {
-        const remaining = this.revealedNpcUntil - now;
-        const fadeOpacity = remaining < 450 ? Math.max(0, remaining / 450) : 0.96;
-        projectActorHatTop(npc.actor, npc.labelObj, false, fadeOpacity, false);
-      } else {
-        npc.labelObj.el.hidden = true;
-      }
-    });
-
-    this.remotePlayers.forEach((peer) => {
-      if (!peer.labelObj) return;
-      if (this.revealedNpc === peer && now < this.revealedNpcUntil) {
-        const remaining = this.revealedNpcUntil - now;
-        const fadeOpacity = remaining < 450 ? Math.max(0, remaining / 450) : 0.96;
-        projectActorHatTop(
-          peer.actor,
-          peer.labelObj,
-          false,
-          fadeOpacity,
-          peer.posture === 'kneel'
-        );
-      } else {
-        peer.labelObj.el.hidden = true;
-      }
+    this.labelOverlay.update({
+      selfActor: this.selfActor,
+      selfName: this.profile.name,
+      selfKneeling: this.posture === 'kneel',
+      npcWanderers: this.npcWanderers,
+      remotePlayers: this.remotePlayers
     });
   }
 
@@ -744,12 +574,7 @@ export class WandererManager {
   }
 
   spawnScreenTapRipple(clientX, clientY) {
-    const el = document.createElement('div');
-    el.className = 'ground-tap-ripple';
-    el.style.left = `${clientX}px`;
-    el.style.top = `${clientY}px`;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 580);
+    this.labelOverlay.spawnTapRipple(clientX, clientY);
   }
 
   startJourneyToPoint(targetVec, spotId = null, toastMessage = null, meditateOnArrival = false) {
@@ -838,9 +663,10 @@ export class WandererManager {
         }
       };
 
-      // 1) 차경루 누각 마루 (y = 0.86)
-      testPlane(ANYANGRU_CONFIG.deckY, (x, z) =>
-        Math.abs(x) <= ANYANGRU_CONFIG.deckHalfW && z >= -23.5 && z <= -15.2
+      // 1) 차경루 누각 마루 (worldDeckY = 0.08)
+      const anyangruHalfW = COURTYARD_CONFIG.walkBounds.anyangruHalfX;
+      testPlane(ANYANGRU_CONFIG.worldDeckY, (x, z) =>
+        Math.abs(x) <= anyangruHalfW && z >= -23.5 && z <= -15.2
       );
       // 2) 청풍사 본전 기단·실내 마루 (y = 0.20)
       testPlane(MURYANGSUJEON_CONFIG.verandaY, (x, z) =>
@@ -852,7 +678,7 @@ export class WandererManager {
       // 3) 동쪽 연화지 청풍교 아치 (y ≈ 0.05)
       testPlane(0.05, (x, z) => x >= 20.1 && x <= 36.9 && z >= -5.75 && z <= -3.25);
       // 4) 기본 마당·정원 지면 (y = -0.78)
-      testPlane(-0.78, null);
+      testPlane(COURTYARD_CONFIG.groundY, null);
     }
 
     if (!hitPoint) return;
@@ -905,11 +731,17 @@ export class WandererManager {
   triggerGreeting() {
     if (!this.selfActor) return;
     const now = this.lastElapsed || 0;
+    this._seatRequestSeq = (this._seatRequestSeq || 0) + 1;
 
     if (this.posture !== 'kneel' && this.occupiedSeatIndex !== null) {
       this.targetCushion = null;
       this.releaseOccupiedSeat();
       this.publishImmediateSelfState();
+    }
+    if (this.posture !== 'kneel') {
+      this.pendingHallMeditationOnArrival = false;
+      this.targetHallCushion = null;
+      this.activeHallSeatIndex = null;
     }
 
     this.waypoints = [];
@@ -1080,6 +912,7 @@ export class WandererManager {
   async sitAtAutoSeat() {
     if (!this.selfActor || this.seatRequestInFlight) return false;
     this.seatRequestInFlight = true;
+    const reqSeq = (this._seatRequestSeq = (this._seatRequestSeq || 0) + 1);
 
     const selfPos = this.selfActor.group.position;
     let res;
@@ -1098,6 +931,13 @@ export class WandererManager {
       this.seatRequestInFlight = false;
     }
 
+    if (reqSeq !== this._seatRequestSeq) {
+      if (res?.ok && this.multiplayerClient) {
+        this.multiplayerClient.releaseSeat();
+      }
+      return false;
+    }
+
     if (!res?.ok) {
       return false;
     }
@@ -1109,6 +949,9 @@ export class WandererManager {
       return true;
     }
 
+    this.pendingHallMeditationOnArrival = false;
+    this.targetHallCushion = null;
+    this.activeHallSeatIndex = null;
     this.occupiedSeatIndex = cushion.index;
     this.targetCushion = cushion;
     this.notifySeatStateChanged();
@@ -1152,6 +995,7 @@ export class WandererManager {
 
     if (this.seatRequestInFlight) return false;
     this.seatRequestInFlight = true;
+    const reqSeq = (this._seatRequestSeq = (this._seatRequestSeq || 0) + 1);
 
     const selfPos = this.selfActor.group.position;
     let res;
@@ -1170,6 +1014,13 @@ export class WandererManager {
       this.seatRequestInFlight = false;
     }
 
+    if (reqSeq !== this._seatRequestSeq) {
+      if (res?.ok && this.multiplayerClient) {
+        this.multiplayerClient.releaseSeat();
+      }
+      return false;
+    }
+
     if (!res?.ok) {
       if (res?.reason === 'occupied') {
         this.callbacks.onToast?.(
@@ -1182,6 +1033,9 @@ export class WandererManager {
       return false;
     }
 
+    this.pendingHallMeditationOnArrival = false;
+    this.targetHallCushion = null;
+    this.activeHallSeatIndex = null;
     this.occupiedSeatIndex = cushion.index;
     this.targetCushion = cushion;
     this.notifySeatStateChanged();
@@ -1255,21 +1109,7 @@ export class WandererManager {
     this.callbacks.onToast?.(`🎋 '${this.currentPalette.fullName}' 차림으로 갈아입었습니다.`);
   }
 
-  spawnBubbleAbove(targetGroup, text, duration = 2.4) {
-    if (!targetGroup) return;
-    const sprite = createWandererBubbleSprite(text);
-    sprite.position.set(0, 1.72, 0);
-    targetGroup.add(sprite);
-    this.activeBubbles.push({
-      sprite,
-      parent: targetGroup,
-      age: 0,
-      duration
-    });
-  }
-
   spawnGroundRipple(pos, colorHex = 0xffd27d) {
-    const geo = new C_ENGINE.RingGeometry(0.18, 0.26, 40);
     const mat = new C_ENGINE.MeshBasicMaterial({
       color: colorHex,
       side: C_ENGINE.DoubleSide,
@@ -1277,7 +1117,7 @@ export class WandererManager {
       opacity: 0.85,
       depthWrite: false
     });
-    const mesh = new C_ENGINE.Mesh(geo, mat);
+    const mesh = new C_ENGINE.Mesh(this.sharedRippleGeo, mat);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(pos.x, pos.y + 0.04, pos.z);
     this.rootGroup.add(mesh);
@@ -1543,22 +1383,7 @@ export class WandererManager {
       );
     }
 
-    // 5. 말풍선 스프라이트 및 바닥 합장 파문 업데이트
-    for (let i = this.activeBubbles.length - 1; i >= 0; i--) {
-      const b = this.activeBubbles[i];
-      b.age += dt;
-      b.sprite.position.y = 1.98 + b.age * 0.12;
-      if (b.age > b.duration - 0.45) {
-        b.sprite.material.opacity = Math.max(0, (b.duration - b.age) / 0.45);
-      }
-      if (b.age >= b.duration) {
-        b.parent.remove(b.sprite);
-        b.sprite.material.map?.dispose();
-        b.sprite.material.dispose();
-        this.activeBubbles.splice(i, 1);
-      }
-    }
-
+    // 5. 바닥 합장 파문 업데이트
     for (let i = this.greetingRipples.length - 1; i >= 0; i--) {
       const r = this.greetingRipples[i];
       r.age += dt;
@@ -1567,7 +1392,6 @@ export class WandererManager {
       r.mat.opacity = Math.max(0, (1 - t) * 0.75);
       if (r.age >= r.duration) {
         this.rootGroup.remove(r.mesh);
-        r.mesh.geometry.dispose();
         r.mat.dispose();
         this.greetingRipples.splice(i, 1);
       }

@@ -5,7 +5,7 @@
 import { LANTERN_COLORS } from '../config/constants.js';
 import { TextureFactory } from './TextureFactory.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class SurfaceMaterials {
   constructor(windUniform) {

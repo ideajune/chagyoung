@@ -8,7 +8,7 @@
 
 import { MURYANGSUJEON_CONFIG } from '../config/worldConfig.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class CheongpungInteriorBuilder {
   constructor(materials, isMobile = false) {

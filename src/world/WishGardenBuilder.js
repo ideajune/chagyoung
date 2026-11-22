@@ -7,8 +7,9 @@
 import { LANTERN_COLORS, INITIAL_WISHES } from '../config/constants.js';
 import { WISH_GARDEN_CONFIG } from '../config/worldConfig.js';
 import { buildRealisticPaljakRoof } from './PaljakRoofBuilder.js';
+import { TextureFactory } from './TextureFactory.js';
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 export class WishGardenBuilder {
   constructor(materials, isMobile = false) {
@@ -743,23 +744,7 @@ export class WishGardenBuilder {
   }
 
   createPlaqueTexture(text) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 160;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#2b1b12';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#c89b54';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-    ctx.fillStyle = '#f5dfb3';
-    ctx.font = 'bold 74px "Noto Serif KR", serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, canvas.width * 0.5, canvas.height * 0.52);
-    const tex = new C_ENGINE.CanvasTexture(canvas);
-    tex.colorSpace = C_ENGINE.SRGBColorSpace;
-    return tex;
+    return TextureFactory.createSimplePlaqueTexture(text);
   }
 
   update(elapsed, _dt) {

@@ -3,7 +3,7 @@
  * Draw Call 수, 그림자 패스 부하 및 PBR UV 투영 비용을 획기적으로 절감하는 경량 배처
  */
 
-const C_ENGINE = window.SANSA_CORE;
+import { SANSA_CORE as C_ENGINE } from '../engine/CoreRuntime.js';
 
 function hasDynamicAncestor(obj, stopAt) {
   let curr = obj;
@@ -60,6 +60,13 @@ function mergeGeometriesList(entries) {
     const m8 = m[8], m9 = m[9], m10 = m[10];
     const m12 = m[12], m13 = m[13], m14 = m[14];
 
+    // 비균일 스케일에서도 법선 왜곡이 없도록 역전치(NormalMatrix) 사용
+    const normalMatrix = new C_ENGINE.Matrix3().getNormalMatrix(matrix);
+    const n = normalMatrix.elements;
+    const n0 = n[0], n1 = n[1], n2 = n[2];
+    const n3 = n[3], n4 = n[4], n5 = n[5];
+    const n6 = n[6], n7 = n[7], n8 = n[8];
+
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
       const o3 = (vOffset + i) * 3;
@@ -74,9 +81,9 @@ function mergeGeometriesList(entries) {
         const nx = normArr[i3];
         const ny = normArr[i3 + 1];
         const nz = normArr[i3 + 2];
-        const tx = m0 * nx + m4 * ny + m8 * nz;
-        const ty = m1 * nx + m5 * ny + m9 * nz;
-        const tz = m2 * nx + m6 * ny + m10 * nz;
+        const tx = n0 * nx + n3 * ny + n6 * nz;
+        const ty = n1 * nx + n4 * ny + n7 * nz;
+        const tz = n2 * nx + n5 * ny + n8 * nz;
         const invLen = 1 / (Math.hypot(tx, ty, tz) || 1);
         normals[o3] = tx * invLen;
         normals[o3 + 1] = ty * invLen;
@@ -183,12 +190,7 @@ export function batchStaticMeshes(rootGroup, materials = null) {
 
   for (const bucket of buckets.values()) {
     if (bucket.entries.length < 2) {
-      if (bucket.isTracked && bucket.entries.length === 1) {
-        newTracked.push({
-          geometry: bucket.entries[0].geometry,
-          material: bucket.material
-        });
-      }
+      // 단일 메쉬는 병합되지 않고 preserved에 그대로 유지되므로 중복 등록하지 않음
       continue;
     }
 
@@ -215,6 +217,19 @@ export function batchStaticMeshes(rootGroup, materials = null) {
   }
 
   rootGroup.add(batchGroup);
+
+  // 병합 후 씬에 더 이상 참조되지 않는 원본 지오메트리 GPU 버퍼 해제
+  const stillReferenced = new Set();
+  rootGroup.traverse((obj) => {
+    if (obj.isMesh && obj.geometry) {
+      stillReferenced.add(obj.geometry);
+    }
+  });
+  for (const geo of mergedOriginals) {
+    if (!stillReferenced.has(geo) && typeof geo.dispose === 'function') {
+      geo.dispose();
+    }
+  }
 
   if (materials?.trackedGeometries) {
     // 병합되지 않고 남은 동적/단일 메쉬의 trackedGeometry 보존 + 병합된 지오메트리 교체

@@ -94,7 +94,7 @@ export class HudController {
     if (!wish) return;
 
     this.activeWishId = wishId;
-    this.sync3DLanterns();
+    this.propsManager.setActiveLantern(this.activeWishId);
 
     const worldPos = this.propsManager.getLanternWorldPos(wishId);
     if (worldPos) {
@@ -124,7 +124,7 @@ export class HudController {
     if (!this.activeWishId) return;
     this.activeWishId = null;
     document.getElementById('wish-reader-card')?.classList.remove('open');
-    this.sync3DLanterns();
+    this.propsManager.setActiveLantern(null);
     this.cameraController.returnToFollow();
   }
 
@@ -250,7 +250,6 @@ export class HudController {
       if (valEl) valEl.textContent = `${val}%`;
     };
 
-    setSlider('bell', bell);
     setSlider('water', water);
     setSlider('wind', wind);
 
