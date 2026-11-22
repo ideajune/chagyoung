@@ -20,11 +20,24 @@ import { WebSocketTransport } from './transports/WebSocketTransport.js';
 import { SupabaseTransport } from './transports/SupabaseTransport.js';
 import { LocalBroadcastTransport } from './transports/LocalBroadcastTransport.js';
 
+const SESSION_PEER_ID_KEY = 'cheongpungsa_session_peer_id_v1';
+
 function createClientId() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `w-${crypto.randomUUID().slice(0, 10)}`;
+  try {
+    const existing = sessionStorage.getItem(SESSION_PEER_ID_KEY);
+    if (existing) return existing;
+    const created =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `w-${crypto.randomUUID().slice(0, 10)}`
+        : `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    sessionStorage.setItem(SESSION_PEER_ID_KEY, created);
+    return created;
+  } catch {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `w-${crypto.randomUUID().slice(0, 10)}`;
+    }
+    return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   }
-  return `w-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 export class MultiplayerClient {
@@ -38,6 +51,8 @@ export class MultiplayerClient {
     this.connected = false;
     this.intentionalClose = false;
 
+    this.sessionEpoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
     this.selfState = {
       id: this.selfId,
       name: '산사 나그네',
@@ -49,22 +64,27 @@ export class MultiplayerClient {
       seatIndex: null,
       hallSeatIndex: null,
       joinedAt: Date.now(),
+      sessionEpoch: this.sessionEpoch,
       stateSeq: 1
     };
 
-    // peerId -> { id, name, paletteIdx, x, z, yaw, posture, seatIndex, hallSeatIndex, stateSeq, updatedAt }
+    // peerId -> { id, name, paletteIdx, x, z, yaw, posture, seatIndex, hallSeatIndex, sessionEpoch, stateSeq, updatedAt }
     this.peers = new Map();
     this.roomSummaries = [];
 
     this.stateSeqCounter = 1;
     this.lastSentAt = 0;
     this.lastSentHash = '';
-    this._onBeforeUnload = () => this.disconnect();
+    this._onUnload = () => this.disconnect();
   }
 
   async connect(initialSelfState = {}) {
-    Object.assign(this.selfState, initialSelfState, { id: this.selfId });
-    window.addEventListener('beforeunload', this._onBeforeUnload);
+    Object.assign(this.selfState, initialSelfState, {
+      id: this.selfId,
+      sessionEpoch: this.sessionEpoch
+    });
+    window.addEventListener('beforeunload', this._onUnload);
+    window.addEventListener('pagehide', this._onUnload);
 
     // 1순위: Supabase 설정이 존재할 경우 서버리스 클라우드 연결
     if (NETWORK_CONFIG.supabaseUrl && NETWORK_CONFIG.supabaseAnonKey) {
@@ -92,8 +112,10 @@ export class MultiplayerClient {
   }
 
   disconnect() {
+    if (this.intentionalClose) return;
     this.intentionalClose = true;
-    window.removeEventListener('beforeunload', this._onBeforeUnload);
+    window.removeEventListener('beforeunload', this._onUnload);
+    window.removeEventListener('pagehide', this._onUnload);
     this.transport?.disconnect();
     this.transport = null;
     this.connected = false;
@@ -186,14 +208,23 @@ export class MultiplayerClient {
       incomingIds.add(p.id);
       const prev = this.peers.get(p.id);
       const isNew = !prev;
+      const sameEpoch =
+        Boolean(prev?.sessionEpoch && p.sessionEpoch) && prev.sessionEpoch === p.sessionEpoch;
       const prevSeq = Number(prev?.stateSeq || 0);
       const incomingSeq = Number(p.stateSeq || 0);
 
-      // 기기 간 시계 오차 영향을 없애기 위해 송신자별 단조 증가 시퀀스(stateSeq)로만 최신 상태 판별
-      const next =
-        prev && prevSeq > incomingSeq
-          ? { ...p, ...prev, updatedAt: nowPerf }
-          : { ...prev, ...p, stateSeq: Math.max(prevSeq, incomingSeq), updatedAt: nowPerf };
+      // 같은 세션(sessionEpoch) 내에서만 오래된 Presence 스냅샷이 최신 Broadcast를 덮어쓰지 않도록 보호
+      // 새로고침(새 sessionEpoch)이면 무조건 새 위치·자세로 즉시 갱신
+      const keepPrevState = Boolean(prev && sameEpoch && prevSeq > incomingSeq);
+      const next = keepPrevState
+        ? { ...p, ...prev, updatedAt: nowPerf }
+        : {
+            ...prev,
+            ...p,
+            sessionEpoch: p.sessionEpoch || prev?.sessionEpoch || '',
+            stateSeq: sameEpoch ? Math.max(prevSeq, incomingSeq) : incomingSeq || 1,
+            updatedAt: nowPerf
+          };
 
       this.peers.set(p.id, next);
       if (isNew) {
@@ -251,6 +282,7 @@ export class MultiplayerClient {
       seatIndex: this.selfState.seatIndex,
       hallSeatIndex: this.selfState.hallSeatIndex,
       joinedAt: this.selfState.joinedAt,
+      sessionEpoch: this.sessionEpoch,
       stateSeq
     };
 

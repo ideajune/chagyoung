@@ -12,6 +12,8 @@ export class SupabaseTransport {
     this.channel = null;
     this.roomSwitching = false;
     this.syncTimer = null;
+    this._lastTrackKey = '';
+    this._lastTrackAt = 0;
   }
 
   async connect() {
@@ -71,7 +73,10 @@ export class SupabaseTransport {
     const c = this.client;
     c.roomId = targetRoomId;
     const channel = this.supabase.channel(`cheongpungsa-room-${targetRoomId}`, {
-      config: { presence: { key: c.selfId } }
+      config: {
+        presence: { key: c.selfId },
+        broadcast: { self: false, ack: false }
+      }
     });
     this.channel = channel;
 
@@ -88,6 +93,7 @@ export class SupabaseTransport {
         seatIndex: c.selfState.seatIndex,
         hallSeatIndex: c.selfState.hallSeatIndex,
         joinedAt: c.selfState.joinedAt,
+        sessionEpoch: c.selfState.sessionEpoch,
         stateSeq: c.selfState.stateSeq || 1
       };
       channel.send({
@@ -95,6 +101,22 @@ export class SupabaseTransport {
         event: 'peer_state',
         payload: snapshot
       });
+    };
+
+    const pruneStalePeers = () => {
+      const nowPerf = performance.now();
+      const timeoutMs = NETWORK_CONFIG.peerTimeoutMs || 14000;
+      let removedAny = false;
+      for (const [peerId, peer] of c.peers.entries()) {
+        if (peer?.updatedAt && nowPerf - peer.updatedAt > timeoutMs) {
+          c.peers.delete(peerId);
+          c.callbacks.onPeerLeft?.(peerId, peer);
+          removedAny = true;
+        }
+      }
+      if (removedAny) {
+        c.emitRoomUpdate();
+      }
     };
 
     channel
@@ -141,15 +163,19 @@ export class SupabaseTransport {
       .on('broadcast', { event: 'peer_state' }, ({ payload }) => {
         if (payload && payload.id && payload.id !== c.selfId) {
           const prev = c.peers.get(payload.id) || {};
+          const sameEpoch =
+            Boolean(prev.sessionEpoch && payload.sessionEpoch) &&
+            prev.sessionEpoch === payload.sessionEpoch;
           const prevSeq = Number(prev.stateSeq || 0);
           const nextSeq = Number(payload.stateSeq || 0);
-          if (prevSeq > 0 && nextSeq > 0 && nextSeq < prevSeq) {
+          if (sameEpoch && prevSeq > 0 && nextSeq > 0 && nextSeq < prevSeq) {
             return;
           }
           const merged = {
             ...prev,
             ...payload,
-            stateSeq: Math.max(prevSeq, nextSeq),
+            sessionEpoch: payload.sessionEpoch || prev.sessionEpoch || '',
+            stateSeq: sameEpoch ? Math.max(prevSeq, nextSeq) : nextSeq || 1,
             updatedAt: performance.now(),
             lastBroadcastAt: performance.now()
           };
@@ -161,6 +187,15 @@ export class SupabaseTransport {
           } else {
             c.callbacks.onPeerUpdated?.(merged);
           }
+        }
+      })
+      .on('broadcast', { event: 'peer_leave' }, ({ payload }) => {
+        const departedId = payload?.peerId;
+        if (departedId && departedId !== c.selfId && c.peers.has(departedId)) {
+          const departed = c.peers.get(departedId);
+          c.peers.delete(departedId);
+          c.callbacks.onPeerLeft?.(departedId, departed);
+          c.emitRoomUpdate();
         }
       })
       .on('broadcast', { event: 'peer_action' }, ({ payload }) => {
@@ -203,6 +238,7 @@ export class SupabaseTransport {
             if (this.syncTimer) clearInterval(this.syncTimer);
             this.syncTimer = setInterval(() => {
               sendMyLatestState();
+              pruneStalePeers();
             }, 4500);
             resolve();
           } catch (err) {
@@ -226,6 +262,12 @@ export class SupabaseTransport {
     }
     if (this.channel && this.supabase) {
       try {
+        this.channel.send({
+          type: 'broadcast',
+          event: 'peer_leave',
+          payload: { peerId: this.client.selfId }
+        });
+        this.channel.untrack().catch(() => {});
         this.supabase.removeChannel(this.channel);
       } catch {
         // ignore
@@ -241,9 +283,12 @@ export class SupabaseTransport {
       event: 'peer_state',
       payload: state
     });
+    const nowPerf = performance.now();
     const trackKey = `${state.posture}|${state.seatIndex}|${state.hallSeatIndex}|${state.paletteIdx}|${state.name}`;
-    if (forceImmediate || trackKey !== this._lastTrackKey) {
+    const shouldTrackByTime = nowPerf - this._lastTrackAt >= 900;
+    if (forceImmediate || trackKey !== this._lastTrackKey || shouldTrackByTime) {
       this._lastTrackKey = trackKey;
+      this._lastTrackAt = nowPerf;
       this.channel.track(state).catch(() => {});
     }
   }
