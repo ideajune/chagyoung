@@ -94,6 +94,8 @@ export class MultiplayerClient {
         this.transportMode = supa.mode;
         return;
       }
+      // 모바일 초기 WebGL 로딩·네트워크 지연으로 1차 연결 실패 시 백그라운드 자동 재시도 예약
+      this.scheduleSupabaseRetry();
     }
 
     // 2순위: 동일 호스트(/ws) 또는 지정된 WebSocket 중계 서버 탐색
@@ -111,9 +113,31 @@ export class MultiplayerClient {
     local.connect();
   }
 
+  scheduleSupabaseRetry(attempt = 1) {
+    if (this.intentionalClose || this.transportMode === 'supabase' || attempt > 6) return;
+    if (this._supaRetryTimer) clearTimeout(this._supaRetryTimer);
+    this._supaRetryTimer = setTimeout(async () => {
+      this._supaRetryTimer = null;
+      if (this.intentionalClose || this.transportMode === 'supabase') return;
+      const supa = new SupabaseTransport(this);
+      if (await supa.connect()) {
+        this.transport?.disconnect();
+        this.transport = supa;
+        this.transportMode = supa.mode;
+        this.emitRoomUpdate();
+        return;
+      }
+      this.scheduleSupabaseRetry(attempt + 1);
+    }, 5000);
+  }
+
   disconnect() {
     if (this.intentionalClose) return;
     this.intentionalClose = true;
+    if (this._supaRetryTimer) {
+      clearTimeout(this._supaRetryTimer);
+      this._supaRetryTimer = null;
+    }
     window.removeEventListener('beforeunload', this._onUnload);
     window.removeEventListener('pagehide', this._onUnload);
     this.transport?.disconnect();

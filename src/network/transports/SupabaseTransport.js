@@ -16,9 +16,25 @@ export class SupabaseTransport {
     this._lastTrackAt = 0;
   }
 
+  async loadSupabaseModule() {
+    const cdnUrls = [
+      'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm',
+      'https://esm.sh/@supabase/supabase-js@2'
+    ];
+    for (const url of cdnUrls) {
+      try {
+        const mod = await import(url);
+        if (mod?.createClient) return mod;
+      } catch (err) {
+        console.warn(`[Supabase] CDN 로드 실패 (${url}):`, err?.message || err);
+      }
+    }
+    return null;
+  }
+
   async connect() {
     try {
-      const mod = await import('https://esm.sh/@supabase/supabase-js@2');
+      const mod = await this.loadSupabaseModule();
       if (!mod?.createClient) return false;
 
       this.supabase = mod.createClient(
@@ -219,7 +235,7 @@ export class SupabaseTransport {
           settled = true;
           reject(new Error('Supabase channel subscribe timeout'));
         }
-      }, 6000);
+      }, 15000);
 
       channel.subscribe(async (status) => {
         if (settled) return;
