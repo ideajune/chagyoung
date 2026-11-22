@@ -9,6 +9,8 @@
 
 import { NETWORK_CONFIG } from '../config/networkConfig.js';
 import {
+  ANYANGRU_CUSHIONS,
+  HALL_CUSHIONS,
   selectPriorityAnyangruCushion,
   getAnyangruCushionByIndex,
   getHallCushionByIndex,
@@ -46,7 +48,8 @@ export class MultiplayerClient {
       posture: 'walk',
       seatIndex: null,
       hallSeatIndex: null,
-      joinedAt: Date.now()
+      joinedAt: Date.now(),
+      stateUpdatedAt: Date.now()
     };
 
     // peerId -> { id, name, paletteIdx, x, z, yaw, posture, seatIndex, updatedAt }
@@ -126,6 +129,17 @@ export class MultiplayerClient {
           name: peer.name || '산사 나그네',
           isSelf: false
         });
+      } else if (peer.posture === 'kneel' && Number.isFinite(peer.x) && Number.isFinite(peer.z)) {
+        for (const c of ANYANGRU_CUSHIONS) {
+          if (Math.hypot(peer.x - c.x, peer.z - c.z) <= 0.65 && !map.has(c.index)) {
+            map.set(c.index, {
+              peerId,
+              name: peer.name || '산사 나그네',
+              isSelf: false
+            });
+            break;
+          }
+        }
       }
     }
     return map;
@@ -147,18 +161,39 @@ export class MultiplayerClient {
           name: peer.name || '산사 나그네',
           isSelf: false
         });
+      } else if (peer.posture === 'kneel' && Number.isFinite(peer.x) && Number.isFinite(peer.z)) {
+        for (const c of HALL_CUSHIONS) {
+          if (Math.hypot(peer.x - c.x, peer.z - c.z) <= 0.65 && !map.has(c.index)) {
+            map.set(c.index, {
+              peerId,
+              name: peer.name || '산사 나그네',
+              isSelf: false
+            });
+            break;
+          }
+        }
       }
     }
     return map;
   }
 
-  syncPeersSnapshot(peerList) {
+  syncPeersSnapshot(peerList, { preserveRecentBroadcastMs = 0 } = {}) {
+    const nowPerf = performance.now();
     const incomingIds = new Set();
     for (const p of peerList) {
       if (!p || p.id === this.selfId) continue;
       incomingIds.add(p.id);
-      const isNew = !this.peers.has(p.id);
-      const next = { ...this.peers.get(p.id), ...p, updatedAt: performance.now() };
+      const prev = this.peers.get(p.id);
+      const isNew = !prev;
+      const prevTs = Number(prev?.stateUpdatedAt || 0);
+      const incomingTs = Number(p.stateUpdatedAt || 0);
+
+      // 오래된 Presence 스냅샷이 최신 Broadcast 상태(위치·자세·방석)를 덮어쓰지 않도록 보호
+      const next =
+        prev && prevTs > incomingTs
+          ? { ...p, ...prev, updatedAt: nowPerf }
+          : { ...prev, ...p, stateUpdatedAt: Math.max(prevTs, incomingTs), updatedAt: nowPerf };
+
       this.peers.set(p.id, next);
       if (isNew) {
         this.callbacks.onPeerJoined?.(next);
@@ -169,6 +204,13 @@ export class MultiplayerClient {
 
     for (const [existingId, departed] of this.peers.entries()) {
       if (!incomingIds.has(existingId)) {
+        if (
+          preserveRecentBroadcastMs > 0 &&
+          departed?.lastBroadcastAt &&
+          nowPerf - departed.lastBroadcastAt < preserveRecentBroadcastMs
+        ) {
+          continue;
+        }
         this.peers.delete(existingId);
         this.callbacks.onPeerLeft?.(existingId, departed);
       }
@@ -194,6 +236,8 @@ export class MultiplayerClient {
 
     this.lastSentAt = now;
     this.lastSentHash = hash;
+    const stateUpdatedAt = Date.now();
+    this.selfState.stateUpdatedAt = stateUpdatedAt;
 
     const payload = {
       id: this.selfId,
@@ -204,7 +248,9 @@ export class MultiplayerClient {
       yaw: qy,
       posture: this.selfState.posture,
       seatIndex: this.selfState.seatIndex,
-      hallSeatIndex: this.selfState.hallSeatIndex
+      hallSeatIndex: this.selfState.hallSeatIndex,
+      joinedAt: this.selfState.joinedAt,
+      stateUpdatedAt
     };
 
     this.transport?.sendState(payload, forceImmediate);

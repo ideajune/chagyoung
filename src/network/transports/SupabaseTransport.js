@@ -72,6 +72,29 @@ export class SupabaseTransport {
     const channel = this.supabase.channel(`cheongpungsa-room-${targetRoomId}`, {
       config: { presence: { key: c.selfId } }
     });
+    this.channel = channel;
+
+    const sendMyLatestState = () => {
+      if (!this.channel || this.channel !== channel) return;
+      const snapshot = {
+        id: c.selfId,
+        name: c.selfState.name,
+        paletteIdx: c.selfState.paletteIdx,
+        x: Math.round((c.selfState.x || 0) * 100) / 100,
+        z: Math.round((c.selfState.z || 0) * 100) / 100,
+        yaw: Math.round((c.selfState.yaw || 0) * 100) / 100,
+        posture: c.selfState.posture,
+        seatIndex: c.selfState.seatIndex,
+        hallSeatIndex: c.selfState.hallSeatIndex,
+        joinedAt: c.selfState.joinedAt,
+        stateUpdatedAt: c.selfState.stateUpdatedAt || Date.now()
+      };
+      channel.send({
+        type: 'broadcast',
+        event: 'peer_state',
+        payload: snapshot
+      });
+    };
 
     channel
       .on('presence', { event: 'sync' }, () => {
@@ -98,17 +121,45 @@ export class SupabaseTransport {
           }
         }
 
-        c.syncPeersSnapshot(peerEntries.filter((p) => p.id !== c.selfId));
+        c.syncPeersSnapshot(peerEntries.filter((p) => p.id !== c.selfId), {
+          preserveRecentBroadcastMs: 4500
+        });
         c.emitRoomUpdate();
+      })
+      .on('presence', { event: 'join' }, ({ key }) => {
+        // 신규 접속자가 들어오면 가만히 있던 기존 접속자도 즉시 자신의 현재 위치·자세·좌석을 전송
+        if (key && key !== c.selfId) {
+          sendMyLatestState();
+        }
+      })
+      .on('broadcast', { event: 'request_sync' }, ({ payload }) => {
+        if (payload && payload.senderId && payload.senderId !== c.selfId) {
+          sendMyLatestState();
+        }
       })
       .on('broadcast', { event: 'peer_state' }, ({ payload }) => {
         if (payload && payload.id && payload.id !== c.selfId) {
           const prev = c.peers.get(payload.id) || {};
-          const merged = { ...prev, ...payload, updatedAt: performance.now() };
+          const prevTs = Number(prev.stateUpdatedAt || 0);
+          const nextTs = Number(payload.stateUpdatedAt || 0);
+          if (prevTs > 0 && nextTs > 0 && nextTs < prevTs) {
+            return;
+          }
+          const merged = {
+            ...prev,
+            ...payload,
+            stateUpdatedAt: Math.max(prevTs, nextTs, Date.now()),
+            updatedAt: performance.now(),
+            lastBroadcastAt: performance.now()
+          };
           const isNew = !c.peers.has(payload.id);
           c.peers.set(payload.id, merged);
-          if (isNew) c.callbacks.onPeerJoined?.(merged);
-          else c.callbacks.onPeerUpdated?.(merged);
+          if (isNew) {
+            c.callbacks.onPeerJoined?.(merged);
+            c.emitRoomUpdate();
+          } else {
+            c.callbacks.onPeerUpdated?.(merged);
+          }
         }
       })
       .on('broadcast', { event: 'peer_action' }, ({ payload }) => {
@@ -140,7 +191,15 @@ export class SupabaseTransport {
           settled = true;
           clearTimeout(subTimer);
           try {
+            c.selfState.stateUpdatedAt = Date.now();
             await channel.track({ ...c.selfState });
+            // 입장 직후 방 안의 모든 기존 접속자에게 현재 상태 동기화 요청 + 내 상태 1회 전파
+            channel.send({
+              type: 'broadcast',
+              event: 'request_sync',
+              payload: { senderId: c.selfId }
+            });
+            sendMyLatestState();
             resolve();
           } catch (err) {
             reject(err);
@@ -174,7 +233,9 @@ export class SupabaseTransport {
       event: 'peer_state',
       payload: state
     });
-    if (forceImmediate) {
+    const trackKey = `${state.posture}|${state.seatIndex}|${state.hallSeatIndex}|${state.paletteIdx}|${state.name}`;
+    if (forceImmediate || trackKey !== this._lastTrackKey) {
+      this._lastTrackKey = trackKey;
       this.channel.track(state).catch(() => {});
     }
   }
