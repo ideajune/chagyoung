@@ -598,7 +598,7 @@ export class PropsManager {
       }
     }
 
-    // 7. 청풍사 실내 40석 방석 선택·호버 링 피드백 업데이트
+    // 7. 청풍사 실내 40석 방석 선택·호버·점유 링 피드백 업데이트
     if (this.indoorCushionEntries.length > 0 && this.indoorSeatInfoProvider) {
       const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.2);
       for (const entry of this.indoorCushionEntries) {
@@ -609,11 +609,16 @@ export class PropsManager {
           entry.ringMat.color.setHex(0xfbbf24);
           entry.ringMat.opacity = 0.65 + pulse * 0.28;
           entry.ringMesh.scale.setScalar(1.0 + pulse * 0.05);
-        } else if (isHovered) {
+        } else if (isHovered && info?.status === 'empty') {
           entry.ringMesh.visible = true;
           entry.ringMat.color.setHex(0xfef08a);
           entry.ringMat.opacity = 0.78;
           entry.ringMesh.scale.setScalar(1.04);
+        } else if (info?.status === 'occupied') {
+          entry.ringMesh.visible = true;
+          entry.ringMat.color.setHex(isHovered ? 0xf87171 : 0x6ee7b7);
+          entry.ringMat.opacity = isHovered ? 0.65 : 0.32;
+          entry.ringMesh.scale.setScalar(1.0);
         } else {
           entry.ringMesh.visible = false;
           entry.ringMat.opacity = 0;

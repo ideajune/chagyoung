@@ -2,10 +2,10 @@
  * server/multiplayerServer.js — 청풍사 · 차경루 무의존성(Zero-dependency) 실시간 멀티플레이어 & 정적 웹 서버
  *
  * - 외부 패키지 설치 없이 Node.js 내장 모듈(node:http, node:crypto, node:fs, node:path)만으로 즉시 구동됩니다.
- * - 방당 정원 21명(차경루 7열 × 3줄 방석 수) 자동 샤딩: 21명 초과 시 제2산방, 제3산방 자동 생성·배정
+ * - 방당 정원 61명(차경루 21석 + 청풍사 본전 실내 40석) 자동 샤딩: 61명 초과 시 제2산방, 제3산방 자동 생성·배정
  * - 서버 권위(Authoritative) 좌석 배정:
- *   1) 자동 배정(auto): 현재 캐릭터 위치(x, z)에서 가장 가까운 빈 방석부터 순차 배정
- *   2) 수동 선택(manual): 본인이 3D 방석을 클릭해 선택한 특정 방석(0~20) 중복 점유 검증 및 즉시 배정
+ *   1) 자동 배정(auto): 차경루 앞줄 중앙 우선 배정(만석 시 실내 가장 가까운 빈 방석 자동 배정) 및 실내 가장 가까운 빈 방석 배정
+ *   2) 수동 선택(manual): 차경루(0~20) · 청풍사 실내(0~39) 특정 방석 중복 점유 검증 및 즉시 배정
  * - 소원 연등 & 합장 전 산방(전체 채널) 실시간 공유 및 영속화
  */
 
@@ -19,7 +19,9 @@ import {
   ANYANGRU_CUSHIONS,
   COURTYARD_CONFIG,
   FRONT_CENTER_PRIORITY_CUSHIONS,
-  MAX_VISITORS_PER_ROOM
+  HALL_CUSHIONS,
+  MAX_VISITORS_PER_ROOM,
+  selectNearestHallCushion
 } from '../src/config/worldConfig.js';
 import { INITIAL_WISHES, WANDERER_POETIC_NAMES } from '../src/config/constants.js';
 
@@ -182,6 +184,18 @@ function getRoomOccupiedSeats(roomMap, excludeClientId = null) {
   return occupied;
 }
 
+function getRoomOccupiedHallSeats(roomMap, excludeClientId = null) {
+  const occupied = new Map();
+  for (const [cid, session] of roomMap.entries()) {
+    if (cid === excludeClientId) continue;
+    const hIdx = session.player?.hallSeatIndex;
+    if (Number.isInteger(hIdx) && hIdx >= 0 && hIdx < HALL_CUSHIONS.length) {
+      occupied.set(hIdx, session.player);
+    }
+  }
+  return occupied;
+}
+
 function assignNearestSeatInRoom(roomMap, clientId, _x = 0, _z = 0) {
   const occupied = getRoomOccupiedSeats(roomMap, clientId);
 
@@ -193,6 +207,12 @@ function assignNearestSeatInRoom(roomMap, clientId, _x = 0, _z = 0) {
   }
 
   return null;
+}
+
+function assignNearestHallSeatInRoom(roomMap, clientId, x = 0, z = 0) {
+  const occupied = getRoomOccupiedHallSeats(roomMap, clientId);
+  const { cushion } = selectNearestHallCushion(x, z, new Set(occupied.keys()));
+  return cushion ? cushion.index : null;
 }
 
 /* =========================================================================
@@ -319,7 +339,8 @@ function handleClientMessage(session, msg) {
         z: Number.isFinite(incoming.z) ? clampServerZ(incoming.z) : 1.5,
         yaw: Number.isFinite(incoming.yaw) ? Number(incoming.yaw) : 0,
         posture: incoming.posture === 'kneel' ? 'kneel' : 'walk',
-        seatIndex: null
+        seatIndex: null,
+        hallSeatIndex: null
       };
 
       room.set(session.id, session);
@@ -337,6 +358,7 @@ function handleClientMessage(session, msg) {
         roomId: assignedRoomId,
         assignedName: uniqueName,
         seatIndex: null,
+        hallSeatIndex: null,
         peers: peersInRoom,
         rooms: getRoomsSummary(),
         wishes: sharedWishes
@@ -365,6 +387,7 @@ function handleClientMessage(session, msg) {
 
       session.roomId = finalRoomId;
       session.player.seatIndex = null;
+      session.player.hallSeatIndex = null;
       session.player.posture = 'walk';
       session.player.name = ensureUniqueRoomNickname(
         newRoom,
@@ -416,6 +439,9 @@ function handleClientMessage(session, msg) {
       if (p.seatIndex === null) {
         session.player.seatIndex = null;
       }
+      if (p.hallSeatIndex === null) {
+        session.player.hallSeatIndex = null;
+      }
 
       broadcastToRoom(
         session.roomId,
@@ -428,6 +454,7 @@ function handleClientMessage(session, msg) {
       break;
     }
 
+    case 'request_seat':
     case 'claim_seat': {
       if (!session.roomId || !session.player) return;
       const room = rooms.get(session.roomId);
@@ -435,11 +462,75 @@ function handleClientMessage(session, msg) {
 
       const reqId = msg.reqId || '';
       const mode = msg.mode === 'manual' ? 'manual' : 'auto';
+      const zone = msg.zone === 'hall' ? 'hall' : 'anyangru';
+
+      if (zone === 'hall') {
+        if (mode === 'manual') {
+          const idx = Number(msg.seatIndex);
+          if (!Number.isInteger(idx) || idx < 0 || idx >= HALL_CUSHIONS.length) {
+            sendJson(session, { type: 'seat_result', reqId, ok: false, zone: 'hall', reason: 'invalid_seat' });
+            return;
+          }
+          const occupied = getRoomOccupiedHallSeats(room, session.id);
+          if (occupied.has(idx)) {
+            const holder = occupied.get(idx);
+            sendJson(session, {
+              type: 'seat_result',
+              reqId,
+              ok: false,
+              zone: 'hall',
+              reason: 'occupied',
+              seatIndex: idx,
+              hallSeatIndex: idx,
+              occupantName: holder?.name || '다른 나그네'
+            });
+            return;
+          }
+
+          session.player.seatIndex = null;
+          session.player.hallSeatIndex = idx;
+          sendJson(session, { type: 'seat_result', reqId, ok: true, zone: 'hall', seatIndex: idx, hallSeatIndex: idx });
+          broadcastToRoom(
+            session.roomId,
+            { type: 'peer_state', player: session.player },
+            session.id
+          );
+          return;
+        }
+
+        const assignedHallIdx = assignNearestHallSeatInRoom(
+          room,
+          session.id,
+          Number(msg.x) || 0,
+          Number(msg.z) || 0
+        );
+        if (assignedHallIdx === null) {
+          sendJson(session, { type: 'seat_result', reqId, ok: false, zone: 'hall', reason: 'full' });
+          return;
+        }
+
+        session.player.seatIndex = null;
+        session.player.hallSeatIndex = assignedHallIdx;
+        sendJson(session, {
+          type: 'seat_result',
+          reqId,
+          ok: true,
+          zone: 'hall',
+          seatIndex: assignedHallIdx,
+          hallSeatIndex: assignedHallIdx
+        });
+        broadcastToRoom(
+          session.roomId,
+          { type: 'peer_state', player: session.player },
+          session.id
+        );
+        return;
+      }
 
       if (mode === 'manual') {
         const idx = Number(msg.seatIndex);
         if (!Number.isInteger(idx) || idx < 0 || idx >= ANYANGRU_CUSHIONS.length) {
-          sendJson(session, { type: 'seat_result', reqId, ok: false, reason: 'invalid_seat' });
+          sendJson(session, { type: 'seat_result', reqId, ok: false, zone: 'anyangru', reason: 'invalid_seat' });
           return;
         }
         const occupied = getRoomOccupiedSeats(room, session.id);
@@ -449,6 +540,7 @@ function handleClientMessage(session, msg) {
             type: 'seat_result',
             reqId,
             ok: false,
+            zone: 'anyangru',
             reason: 'occupied',
             seatIndex: idx,
             occupantName: holder?.name || '다른 나그네'
@@ -457,7 +549,8 @@ function handleClientMessage(session, msg) {
         }
 
         session.player.seatIndex = idx;
-        sendJson(session, { type: 'seat_result', reqId, ok: true, seatIndex: idx });
+        session.player.hallSeatIndex = null;
+        sendJson(session, { type: 'seat_result', reqId, ok: true, zone: 'anyangru', seatIndex: idx });
         broadcastToRoom(
           session.roomId,
           { type: 'peer_state', player: session.player },
@@ -466,20 +559,46 @@ function handleClientMessage(session, msg) {
         return;
       }
 
-      // Auto 배정: 현재 캐릭터 위치(x, z)에서 가장 가까운 빈자리 방석 배정
+      // Auto 배정: 차경루 우선 배정, 차경루 21석 만석 시 청풍사 실내 빈 방석 자동 배정
       const assignedIdx = assignNearestSeatInRoom(
         room,
         session.id,
         Number(msg.x) || 0,
         Number(msg.z) || 0
       );
-      if (assignedIdx === null) {
-        sendJson(session, { type: 'seat_result', reqId, ok: false, reason: 'full' });
+      if (assignedIdx !== null) {
+        session.player.seatIndex = assignedIdx;
+        session.player.hallSeatIndex = null;
+        sendJson(session, { type: 'seat_result', reqId, ok: true, zone: 'anyangru', seatIndex: assignedIdx });
+        broadcastToRoom(
+          session.roomId,
+          { type: 'peer_state', player: session.player },
+          session.id
+        );
         return;
       }
 
-      session.player.seatIndex = assignedIdx;
-      sendJson(session, { type: 'seat_result', reqId, ok: true, seatIndex: assignedIdx });
+      const fallbackHallIdx = assignNearestHallSeatInRoom(
+        room,
+        session.id,
+        Number(msg.x) || 0,
+        Number(msg.z) || 0
+      );
+      if (fallbackHallIdx === null) {
+        sendJson(session, { type: 'seat_result', reqId, ok: false, zone: 'anyangru', reason: 'full' });
+        return;
+      }
+
+      session.player.seatIndex = null;
+      session.player.hallSeatIndex = fallbackHallIdx;
+      sendJson(session, {
+        type: 'seat_result',
+        reqId,
+        ok: true,
+        zone: 'hall',
+        seatIndex: fallbackHallIdx,
+        hallSeatIndex: fallbackHallIdx
+      });
       broadcastToRoom(
         session.roomId,
         { type: 'peer_state', player: session.player },
@@ -490,8 +609,9 @@ function handleClientMessage(session, msg) {
 
     case 'release_seat': {
       if (!session.roomId || !session.player) return;
-      if (session.player.seatIndex !== null) {
+      if (session.player.seatIndex !== null || session.player.hallSeatIndex !== null) {
         session.player.seatIndex = null;
+        session.player.hallSeatIndex = null;
         broadcastToRoom(
           session.roomId,
           { type: 'peer_state', player: session.player },
@@ -886,7 +1006,7 @@ if (isDirectRun) {
   server.listen(PORT, () => {
     console.log(
       `\n🏮 [산사 View-mung 멀티플레이 서버] http://localhost:${PORT} 실행 완료` +
-        `\n   - 차경루 방석: 총 ${ANYANGRU_CUSHIONS.length}석 (1줄 전망 7석 · 2줄 중간 7석 · 3줄 뒷줄 7석)` +
+        `\n   - 전체 방석: 총 ${MAX_VISITORS_PER_ROOM}석 (차경루 ${ANYANGRU_CUSHIONS.length}석 + 청풍사 본전 실내 ${HALL_CUSHIONS.length}석)` +
         `\n   - 산방 정원제: 방당 최대 ${MAX_VISITORS_PER_ROOM}명 (정원 도달 시 다음 산방 자동 증설)\n`
     );
   });

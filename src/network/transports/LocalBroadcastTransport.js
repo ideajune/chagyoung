@@ -204,7 +204,7 @@ export class LocalBroadcastTransport {
   }
 
   releaseSeat() {
-    this.client.publishSelfState({ seatIndex: null }, true);
+    this.client.publishSelfState({ seatIndex: null, hallSeatIndex: null }, true);
   }
 
   sendAction(actionType, payload) {

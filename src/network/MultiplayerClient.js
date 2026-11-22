@@ -1,5 +1,5 @@
 /**
- * MultiplayerClient — 청풍사 · 차경루 21인 정원제 산방(채널) 실시간 멀티플레이어 오케스트레이터
+ * MultiplayerClient — 청풍사 · 차경루 61인 정원제(차경루 21석 + 본전 실내 40석) 산방 실시간 멀티플레이어 오케스트레이터
  *
  * 전송 계층 자동 탐색 우선순위 (Transport Adapter 패턴):
  * 1) Supabase Realtime (SupabaseTransport)
@@ -10,7 +10,9 @@
 import { NETWORK_CONFIG } from '../config/networkConfig.js';
 import {
   selectPriorityAnyangruCushion,
-  getAnyangruCushionByIndex
+  getAnyangruCushionByIndex,
+  getHallCushionByIndex,
+  selectNearestHallCushion
 } from '../config/worldConfig.js';
 import { WebSocketTransport } from './transports/WebSocketTransport.js';
 import { SupabaseTransport } from './transports/SupabaseTransport.js';
@@ -28,7 +30,7 @@ export class MultiplayerClient {
     this.callbacks = callbacks;
     this.selfId = createClientId();
     this.roomId = NETWORK_CONFIG.preferredRoomNumber || 1;
-    this.maxCapacity = NETWORK_CONFIG.maxVisitorsPerRoom;
+    this.maxCapacity = NETWORK_CONFIG.maxRoomCapacity;
     this.transportMode = 'initializing'; // 'supabase' | 'websocket' | 'local-channel'
     this.transport = null;
     this.connected = false;
@@ -43,6 +45,7 @@ export class MultiplayerClient {
       yaw: 0,
       posture: 'walk',
       seatIndex: null,
+      hallSeatIndex: null,
       joinedAt: Date.now()
     };
 
@@ -128,6 +131,27 @@ export class MultiplayerClient {
     return map;
   }
 
+  getOccupiedHallSeatsMap(excludeSelf = false) {
+    const map = new Map();
+    if (!excludeSelf && Number.isInteger(this.selfState.hallSeatIndex)) {
+      map.set(this.selfState.hallSeatIndex, {
+        peerId: this.selfId,
+        name: this.selfState.name,
+        isSelf: true
+      });
+    }
+    for (const [peerId, peer] of this.peers.entries()) {
+      if (Number.isInteger(peer.hallSeatIndex)) {
+        map.set(peer.hallSeatIndex, {
+          peerId,
+          name: peer.name || '산사 나그네',
+          isSelf: false
+        });
+      }
+    }
+    return map;
+  }
+
   syncPeersSnapshot(peerList) {
     const incomingIds = new Set();
     for (const p of peerList) {
@@ -161,11 +185,11 @@ export class MultiplayerClient {
     const qx = Math.round((this.selfState.x || 0) * 100) / 100;
     const qz = Math.round((this.selfState.z || 0) * 100) / 100;
     const qy = Math.round((this.selfState.yaw || 0) * 100) / 100;
-    const hash = `${qx}|${qz}|${qy}|${this.selfState.posture}|${this.selfState.seatIndex}|${this.selfState.paletteIdx}|${this.selfState.name}`;
+    const hash = `${qx}|${qz}|${qy}|${this.selfState.posture}|${this.selfState.seatIndex}|${this.selfState.hallSeatIndex}|${this.selfState.paletteIdx}|${this.selfState.name}`;
 
     if (!forceImmediate) {
       if (hash === this.lastSentHash) return; // 정지·명상 중 패킷 0바이트
-      if (now - this.lastSentAt < NETWORK_CONFIG.stateSyncIntervalMs) return;
+      if (now - this.lastSentAt < NETWORK_CONFIG.positionSyncIntervalMs) return;
     }
 
     this.lastSentAt = now;
@@ -179,7 +203,8 @@ export class MultiplayerClient {
       z: qz,
       yaw: qy,
       posture: this.selfState.posture,
-      seatIndex: this.selfState.seatIndex
+      seatIndex: this.selfState.seatIndex,
+      hallSeatIndex: this.selfState.hallSeatIndex
     };
 
     this.transport?.sendState(payload, forceImmediate);
@@ -189,50 +214,102 @@ export class MultiplayerClient {
     }
   }
 
-  async requestSeat({ mode = 'auto', seatIndex = null, x = 0, z = 0 } = {}) {
-    const transportResult = await this.transport?.requestSeat({ mode, seatIndex, x, z });
+  async requestSeat({ zone = 'anyangru', mode = 'auto', seatIndex = null, x = 0, z = 0 } = {}) {
+    const targetZone = zone === 'hall' ? 'hall' : 'anyangru';
+    const transportResult = await this.transport?.requestSeat({
+      zone: targetZone,
+      mode,
+      seatIndex,
+      x,
+      z
+    });
     if (transportResult) {
       return transportResult;
     }
 
-    const result = this.resolveSeatLocally({ mode, seatIndex, x, z });
-    if (result.ok && Number.isInteger(result.seatIndex)) {
-      this.selfState.seatIndex = result.seatIndex;
-      this.publishSelfState({ seatIndex: result.seatIndex }, true);
+    const result = this.resolveSeatLocally({ zone: targetZone, mode, seatIndex, x, z });
+    if (result.ok) {
+      if (result.zone === 'hall' && Number.isInteger(result.hallSeatIndex)) {
+        this.selfState.seatIndex = null;
+        this.selfState.hallSeatIndex = result.hallSeatIndex;
+        this.publishSelfState({ seatIndex: null, hallSeatIndex: result.hallSeatIndex }, true);
+      } else if (Number.isInteger(result.seatIndex)) {
+        this.selfState.seatIndex = result.seatIndex;
+        this.selfState.hallSeatIndex = null;
+        this.publishSelfState({ seatIndex: result.seatIndex, hallSeatIndex: null }, true);
+      }
     }
     return result;
   }
 
-  resolveSeatLocally({ mode, seatIndex, x, z }) {
+  resolveSeatLocally({ zone = 'anyangru', mode, seatIndex, x, z }) {
+    if (zone === 'hall') {
+      const occupiedMap = this.getOccupiedHallSeatsMap(true);
+      const occupiedIndices = new Set(occupiedMap.keys());
+
+      if (mode === 'manual') {
+        const seat = getHallCushionByIndex(seatIndex);
+        if (!seat) {
+          return { ok: false, zone: 'hall', reason: 'invalid' };
+        }
+        if (occupiedIndices.has(seatIndex)) {
+          return {
+            ok: false,
+            zone: 'hall',
+            reason: 'occupied',
+            seatIndex,
+            hallSeatIndex: seatIndex,
+            occupantName: occupiedMap.get(seatIndex)?.name || '다른 나그네'
+          };
+        }
+        return { ok: true, zone: 'hall', seatIndex, hallSeatIndex: seatIndex };
+      }
+
+      const { cushion } = selectNearestHallCushion(x, z, occupiedIndices);
+      if (!cushion) {
+        return { ok: false, zone: 'hall', reason: 'full' };
+      }
+      return { ok: true, zone: 'hall', seatIndex: cushion.index, hallSeatIndex: cushion.index };
+    }
+
     const occupiedMap = this.getOccupiedSeatsMap(true);
     const occupiedIndices = new Set(occupiedMap.keys());
 
     if (mode === 'manual') {
       const seat = getAnyangruCushionByIndex(seatIndex);
       if (!seat) {
-        return { ok: false, reason: 'invalid' };
+        return { ok: false, zone: 'anyangru', reason: 'invalid' };
       }
       if (occupiedIndices.has(seatIndex)) {
         return {
           ok: false,
+          zone: 'anyangru',
           reason: 'occupied',
           seatIndex,
           occupantName: occupiedMap.get(seatIndex)?.name || '다른 나그네'
         };
       }
-      return { ok: true, seatIndex };
+      return { ok: true, zone: 'anyangru', seatIndex };
     }
 
     const { cushion } = selectPriorityAnyangruCushion(x, z, occupiedIndices);
-    if (!cushion) {
-      return { ok: false, reason: 'full' };
+    if (cushion) {
+      return { ok: true, zone: 'anyangru', seatIndex: cushion.index };
     }
-    return { ok: true, seatIndex: cushion.index };
+
+    // 차경루 21석 만석 시 청풍사 실내 빈 방석 자동 배정
+    const hallOccupied = new Set(this.getOccupiedHallSeatsMap(true).keys());
+    const { cushion: hallCushion } = selectNearestHallCushion(x, z, hallOccupied);
+    if (!hallCushion) {
+      return { ok: false, zone: 'anyangru', reason: 'full' };
+    }
+    return { ok: true, zone: 'hall', seatIndex: hallCushion.index, hallSeatIndex: hallCushion.index };
   }
 
   releaseSeat() {
-    if (this.selfState.seatIndex === null) return;
+    if (this.selfState.seatIndex === null && this.selfState.hallSeatIndex === null) return;
     this.selfState.seatIndex = null;
+    this.selfState.hallSeatIndex = null;
     this.transport?.releaseSeat();
   }
 
@@ -255,6 +332,7 @@ export class MultiplayerClient {
     if (roomNum === this.roomId) return { ok: true, roomId: this.roomId };
 
     this.selfState.seatIndex = null;
+    this.selfState.hallSeatIndex = null;
     if (this.transport) {
       return this.transport.switchRoom(roomNum);
     }

@@ -364,7 +364,10 @@ export const COURTYARD_CONFIG = {
   ]
 };
 
-export const MAX_VISITORS_PER_ROOM = 21;
+export const HALL_CUSHIONS = MURYANGSUJEON_CONFIG.interior.cushions;
+export const TOTAL_CUSHION_COUNT =
+  ANYANGRU_CONFIG.cushionLocalCoords.length + HALL_CUSHIONS.length;
+export const MAX_VISITORS_PER_ROOM = TOTAL_CUSHION_COUNT;
 
 const CUSHION_ROW_NAMES = {
   1: '1줄 · 계곡 전망 명당',
@@ -608,5 +611,35 @@ export function selectPriorityAnyangruCushion(x = 0, z = 0, occupiedSeatIndices 
   return {
     cushion: null,
     dist: Infinity
+  };
+}
+
+export function getHallCushionByIndex(hallSeatIndex) {
+  if (!Number.isInteger(hallSeatIndex) || hallSeatIndex < 0 || hallSeatIndex >= HALL_CUSHIONS.length) {
+    return null;
+  }
+  return HALL_CUSHIONS[hallSeatIndex] || null;
+}
+
+export function selectNearestHallCushion(x = 0, z = 0, occupiedHallSeatIndices = new Set()) {
+  const occupied =
+    occupiedHallSeatIndices instanceof Set
+      ? occupiedHallSeatIndices
+      : new Set(occupiedHallSeatIndices || []);
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const c of HALL_CUSHIONS) {
+    if (occupied.has(c.index)) continue;
+    const d = Math.hypot(x - c.x, z - c.z);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+
+  return {
+    cushion: best,
+    dist: bestDist
   };
 }

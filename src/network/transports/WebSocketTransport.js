@@ -186,6 +186,9 @@ export class WebSocketTransport {
         if (Number.isInteger(msg.seatIndex) || msg.seatIndex === null) {
           c.selfState.seatIndex = msg.seatIndex;
         }
+        if (Number.isInteger(msg.hallSeatIndex) || msg.hallSeatIndex === null) {
+          c.selfState.hallSeatIndex = msg.hallSeatIndex;
+        }
         c.syncPeersSnapshot(msg.peers || []);
         if (Array.isArray(msg.wishes)) {
           c.callbacks.onWishesSync?.(msg.wishes);
@@ -202,6 +205,7 @@ export class WebSocketTransport {
           c.callbacks.onAssignedProfile?.({ name: msg.assignedName });
         }
         c.selfState.seatIndex = Number.isInteger(msg.seatIndex) ? msg.seatIndex : null;
+        c.selfState.hallSeatIndex = Number.isInteger(msg.hallSeatIndex) ? msg.hallSeatIndex : null;
         c.syncPeersSnapshot(msg.peers || []);
         c.emitRoomUpdate();
         break;
@@ -290,7 +294,7 @@ export class WebSocketTransport {
     this.send({ type: 'state', player: state });
   }
 
-  requestSeat({ mode, seatIndex, x, z }) {
+  requestSeat({ zone = 'anyangru', mode, seatIndex, x, z }) {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       return null;
     }
@@ -298,18 +302,24 @@ export class WebSocketTransport {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingSeatResolvers.delete(reqId);
-        resolve(this.client.resolveSeatLocally({ mode, seatIndex, x, z }));
+        resolve(this.client.resolveSeatLocally({ zone, mode, seatIndex, x, z }));
       }, 1200);
 
       this.pendingSeatResolvers.set(reqId, (res) => {
         clearTimeout(timeout);
-        if (res.ok && Number.isInteger(res.seatIndex)) {
-          this.client.selfState.seatIndex = res.seatIndex;
+        if (res.ok) {
+          if (res.zone === 'hall' && Number.isInteger(res.hallSeatIndex ?? res.seatIndex)) {
+            this.client.selfState.seatIndex = null;
+            this.client.selfState.hallSeatIndex = res.hallSeatIndex ?? res.seatIndex;
+          } else if (Number.isInteger(res.seatIndex)) {
+            this.client.selfState.seatIndex = res.seatIndex;
+            this.client.selfState.hallSeatIndex = null;
+          }
         }
         resolve(res);
       });
 
-      this.send({ type: 'request_seat', reqId, mode, seatIndex, x, z });
+      this.send({ type: 'claim_seat', reqId, zone, mode, seatIndex, x, z });
     });
   }
 
