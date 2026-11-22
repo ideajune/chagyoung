@@ -63,7 +63,7 @@ export class WandererManager {
     this.sharedRippleGeo = new C_ENGINE.RingGeometry(0.18, 0.26, 40);
 
     this.mobileMoveSpeed = 2.42;
-    this.pcMoveSpeed = Number((2.42 * 1.3).toFixed(3)); // PC 보행 속도 30% 상향 (3.146)
+    this.pcMoveSpeed = 4.65; // PC 보행 속도 상향 (넓은 경내 쾌적 이동)
     this.moveSpeed = this.getEffectiveMoveSpeed();
     this.velocity = new C_ENGINE.Vector3();
     this.keys = { w: false, a: false, s: false, d: false };
@@ -717,8 +717,9 @@ export class WandererManager {
 
   setMoveKey(key, pressed) {
     if (!(key in this.keys)) return;
+    const wasPressed = this.keys[key];
     this.keys[key] = pressed;
-    if (pressed) {
+    if (pressed && !wasPressed) {
       this.cancelPointJourney();
     }
   }
@@ -1412,9 +1413,13 @@ export class WandererManager {
         Math.sin(targetRotY - this.selfActor.group.rotation.y),
         Math.cos(targetRotY - this.selfActor.group.rotation.y)
       );
-      this.selfActor.group.rotation.y += angleDiff * (1 - Math.exp(-dt * 10));
+      this.selfActor.group.rotation.y += angleDiff * (1 - Math.exp(-dt * 12));
 
-      this.cameraController.alignBehindHeading(this.selfActor.group.rotation.y, dt);
+      // 키보드 좌/우·후진 이동 중에는 카메라가 캐릭터와 서로 회전 충돌하지 않도록 클릭 이동·전진 시에만 자동 정렬
+      const isKeyboardStrafeOrBack = strafeInput !== 0 || forwardInput < 0;
+      if (!isKeyboardStrafeOrBack) {
+        this.cameraController.alignBehindHeading(this.selfActor.group.rotation.y, dt);
+      }
     } else {
       this.velocity.set(0, 0, 0);
     }
@@ -1436,10 +1441,11 @@ export class WandererManager {
       selfPos.y += (targetGroundY - selfPos.y) * (1 - Math.exp(-dt * 16));
     }
 
-    const normalizedSpeed = Math.min(1, speed / activeMoveSpeed);
-    this.selfActor.update(elapsed, dt, normalizedSpeed);
-    if (this.posture === 'walk' && normalizedSpeed > 0.02) {
-      applyWiderWalkingStride(this.selfActor, normalizedSpeed * (isMobileScreen ? 1.0 : 1.18));
+    // 실제 지면 이동 속도에 비례한 보행 애니메이션 속도 산출 (PC 고속 보행 시 발 미끄러짐 방지)
+    const walkAnimSpeed = Math.min(1.95, speed / 2.25);
+    this.selfActor.update(elapsed, dt, walkAnimSpeed);
+    if (this.posture === 'walk' && walkAnimSpeed > 0.02) {
+      applyWiderWalkingStride(this.selfActor, Math.min(1.3, walkAnimSpeed));
     }
 
     const isActivelyWalking = speed > 0.06 || this.waypoints.length > 0;

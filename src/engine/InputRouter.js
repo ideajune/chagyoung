@@ -22,6 +22,7 @@ export class InputRouter {
     this.pendingHoverY = 0;
     this.lastHoverRunX = -9999;
     this.lastHoverRunY = -9999;
+    this.lastHoverRunTime = 0;
 
     this.bindPointerEvents();
     this.bindKeyboardEvents();
@@ -86,7 +87,7 @@ export class InputRouter {
         return;
       }
 
-      // 데스크톱 마우스 호버 (rAF 쓰로틀링으로 프레임당 최대 1회 레이캐스팅 수행)
+      // 데스크톱 마우스 호버 (55ms 간격 + rAF 쓰로틀링으로 커서 이동 버벅임 방지)
       if (e.pointerType === 'mouse' && this.callbacks.onHover) {
         this.pendingHoverX = e.clientX;
         this.pendingHoverY = e.clientY;
@@ -94,10 +95,13 @@ export class InputRouter {
           this.hoverRafId = requestAnimationFrame(() => {
             this.hoverRafId = null;
             if (this.isPointerDown) return;
+            const now = performance.now();
+            if (now - this.lastHoverRunTime < 55) return;
             const moveSq =
               (this.pendingHoverX - this.lastHoverRunX) ** 2 +
               (this.pendingHoverY - this.lastHoverRunY) ** 2;
-            if (moveSq < 4) return;
+            if (moveSq < 9) return;
+            this.lastHoverRunTime = now;
             this.lastHoverRunX = this.pendingHoverX;
             this.lastHoverRunY = this.pendingHoverY;
             this.callbacks.onHover?.(this.pendingHoverX, this.pendingHoverY);
@@ -168,13 +172,17 @@ export class InputRouter {
 
       const code = e.code;
       if (code === 'KeyW' || code === 'ArrowUp') {
-        this.callbacks.onMoveKey?.('w', true);
+        if (code === 'ArrowUp') e.preventDefault();
+        if (!e.repeat) this.callbacks.onMoveKey?.('w', true);
       } else if (code === 'KeyS' || code === 'ArrowDown') {
-        this.callbacks.onMoveKey?.('s', true);
+        if (code === 'ArrowDown') e.preventDefault();
+        if (!e.repeat) this.callbacks.onMoveKey?.('s', true);
       } else if (code === 'KeyA' || code === 'ArrowLeft') {
-        this.callbacks.onMoveKey?.('a', true);
+        if (code === 'ArrowLeft') e.preventDefault();
+        if (!e.repeat) this.callbacks.onMoveKey?.('a', true);
       } else if (code === 'KeyD' || code === 'ArrowRight') {
-        this.callbacks.onMoveKey?.('d', true);
+        if (code === 'ArrowRight') e.preventDefault();
+        if (!e.repeat) this.callbacks.onMoveKey?.('d', true);
       } else if (code === 'KeyB' || code === 'KeyG') {
         e.preventDefault();
         this.callbacks.onGreet?.();
@@ -199,6 +207,13 @@ export class InputRouter {
       else if (code === 'KeyS' || code === 'ArrowDown') this.callbacks.onMoveKey?.('s', false);
       else if (code === 'KeyA' || code === 'ArrowLeft') this.callbacks.onMoveKey?.('a', false);
       else if (code === 'KeyD' || code === 'ArrowRight') this.callbacks.onMoveKey?.('d', false);
+    });
+
+    window.addEventListener('blur', () => {
+      this.callbacks.onMoveKey?.('w', false);
+      this.callbacks.onMoveKey?.('s', false);
+      this.callbacks.onMoveKey?.('a', false);
+      this.callbacks.onMoveKey?.('d', false);
     });
   }
 

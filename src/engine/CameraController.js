@@ -477,7 +477,7 @@ export class CameraController {
       selfPos.y + lookHeightOffset - zoomOutT * 0.35 - this.pitch * (1.7 + zoomOutT * 0.6);
     const lookTargetZ = selfPos.z - cosYaw * lookAheadDist;
 
-    const smoothRate = this.isDragging ? 24 : 12;
+    const smoothRate = this.isDragging ? 32 : 14;
     const camSmooth = this.camInitialized ? 1 - Math.exp(-dt * smoothRate) : 1.0;
     this.camInitialized = true;
 

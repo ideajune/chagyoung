@@ -880,13 +880,15 @@ export function createMonk(options = {}) {
       const k = smoothstep01(sitProgress);
       stance = 1.0 - k;
 
-      const rawSpeed = Math.max(0, Math.min(1.2, Number(normalizedSpeed) || 0));
-      const speedBlend = dt > 0 ? 1 - Math.exp(-dt * 10.5) : 1.0;
+      const rawSpeed = Math.max(0, Math.min(2.0, Number(normalizedSpeed) || 0));
+      const speedBlend = dt > 0 ? 1 - Math.exp(-dt * 12.5) : 1.0;
       smoothedSpeed += (rawSpeed - smoothedSpeed) * speedBlend;
       const speed = smoothedSpeed < 0.005 ? 0 : smoothedSpeed;
+      const poseAmp = Math.min(1.22, speed);
 
       if (stance > 0.15 && speed > 0.005) {
-        walkPhase += dt * (2.6 + speed * 4.4);
+        // 실제 이동 속도에 비례해 보행 케이던스(발걸음 주기)를 맞춰 미끄러짐 방지
+        walkPhase += dt * (2.2 + speed * 5.8);
       }
 
       const w = stance;
@@ -899,19 +901,19 @@ export function createMonk(options = {}) {
 
       const sinP = Math.sin(walkPhase);
       const cosP = Math.cos(walkPhase);
-      const stride = sinP * speed * w;
+      const stride = sinP * poseAmp * w;
       const breath = Math.sin(elapsed * 1.45);
 
-      // 보행 상하·좌우 중심 이동
-      const walkBob = (Math.cos(walkPhase * 2) * 0.5 + 0.5) * 0.022 * speed * w;
-      const hipSwayX = cosP * 0.014 * speed * w;
+      // 보행 상하·좌우 중심 이동 (발 디딤 리듬감 강화)
+      const walkBob = (Math.cos(walkPhase * 2) * 0.5 + 0.5) * 0.032 * poseAmp * w;
+      const hipSwayX = cosP * 0.018 * poseAmp * w;
       hips.position.set(hipSwayX, baseHipsY + walkBob - 0.37 * k, 0);
 
       // 좌선 시 도포 자락·속옷·고름이 무릎과 방석 위로 자연스럽게 퍼지며, 보행 시 자락이 부드럽게 출렁임
-      const hemSway = sinP * 0.035 * speed * w;
+      const hemSway = sinP * 0.045 * poseAmp * w;
       lowerSkirt.scale.set(1 + 0.26 * k, 1 - 0.38 * k, 1 + 0.18 * k);
       lowerSkirt.position.y = 0.14 + 0.065 * k;
-      lowerSkirt.rotation.set(hemSway * 0.5, 0, -cosP * 0.025 * speed * w);
+      lowerSkirt.rotation.set(hemSway * 0.55, 0, -cosP * 0.032 * poseAmp * w);
 
       innerSkirt.scale.set(1 + 0.14 * k, 1 - 0.35 * k, 1 + 0.12 * k);
       innerSkirt.position.y = 0.14 + 0.055 * k;
@@ -927,46 +929,46 @@ export function createMonk(options = {}) {
       sashTail2.rotation.x = -0.18 * k + hemSway * 0.6;
 
       // 상체·고개
-      const forwardLean = -0.045 * speed * w;
-      hips.rotation.set(k * 0.04 + forwardLean * 0.4, stride * 0.075, sinP * 0.028 * speed * w);
+      const forwardLean = -0.055 * poseAmp * w;
+      hips.rotation.set(k * 0.04 + forwardLean * 0.4, stride * 0.09, sinP * 0.032 * poseAmp * w);
       spine.rotation.set(
         k * 0.03 + forwardLean * 0.6 + sitTransitionLean + breath * 0.014 - prayer * 0.20 * bowDepth,
-        -stride * 0.055,
-        -sinP * 0.018 * speed * w
+        -stride * 0.065,
+        -sinP * 0.022 * poseAmp * w
       );
       chest.rotation.set(
         k * 0.02 + sitTransitionLean * 0.55 + breath * 0.018 - prayer * 0.18 * bowDepth,
-        -stride * 0.075,
-        -sinP * 0.014 * speed * w
+        -stride * 0.085,
+        -sinP * 0.016 * poseAmp * w
       );
       head.rotation.set(
         0.02 + k * 0.05 - forwardLean * 0.5 - breath * 0.012 - prayer * 0.26 * bowDepth,
-        Math.sin(elapsed * 0.45) * 0.03 * k * (1 - prayer) + stride * 0.035,
+        Math.sin(elapsed * 0.45) * 0.03 * k * (1 - prayer) + stride * 0.04,
         0
       );
 
-      // 양다리: 자연스러운 보행 + 좌선 가부좌
-      const thighAmp = 0.42;
+      // 양다리: 보폭·무릎 굽힘 강화로 땅을 디디며 걷는 자연스러운 보행 + 좌선 가부좌
+      const thighAmp = 0.56;
       legL.thigh.rotation.set(stride * thighAmp + k * 1.48, 0, -k * 0.56);
       legR.thigh.rotation.set(-stride * thighAmp + k * 1.48, 0, k * 0.56);
 
-      const leftSwingFlex = Math.pow(Math.max(0, cosP), 1.25) * 0.54;
-      const rightSwingFlex = Math.pow(Math.max(0, -cosP), 1.25) * 0.54;
-      const leftHeelCushion = Math.max(0, sinP) * 0.08;
-      const rightHeelCushion = Math.max(0, -sinP) * 0.08;
-      const leftKneeWalk = (leftSwingFlex + leftHeelCushion) * speed * w;
-      const rightKneeWalk = (rightSwingFlex + rightHeelCushion) * speed * w;
+      const leftSwingFlex = Math.pow(Math.max(0, cosP), 1.2) * 0.68;
+      const rightSwingFlex = Math.pow(Math.max(0, -cosP), 1.2) * 0.68;
+      const leftHeelCushion = Math.max(0, sinP) * 0.11;
+      const rightHeelCushion = Math.max(0, -sinP) * 0.11;
+      const leftKneeWalk = (leftSwingFlex + leftHeelCushion) * poseAmp * w;
+      const rightKneeWalk = (rightSwingFlex + rightHeelCushion) * poseAmp * w;
       legL.shin.rotation.set(-leftKneeWalk - k * 0.12, 0, k * 1.48);
       legR.shin.rotation.set(-rightKneeWalk - k * 0.12, 0, -k * 1.48);
 
-      const leftFootWalk = (sinP * 0.14 + Math.max(0, cosP) * 0.12) * speed * w;
-      const rightFootWalk = (-sinP * 0.14 + Math.max(0, -cosP) * 0.12) * speed * w;
+      const leftFootWalk = (sinP * 0.20 + Math.max(0, cosP) * 0.16) * poseAmp * w;
+      const rightFootWalk = (-sinP * 0.20 + Math.max(0, -cosP) * 0.16) * poseAmp * w;
       legL.foot.rotation.set(leftFootWalk, 0, k * 0.25);
       legR.foot.rotation.set(rightFootWalk, 0, -k * 0.25);
 
       // 양팔·소매: 보행 흔들림 -> 좌선 선정인(단전 위 양손 포개기) -> 합장 인사
       const idleArmOut = 0.34 * w;
-      const armAmp = 0.36;
+      const armAmp = 0.48;
       const baseUpperLX = -stride * armAmp + k * 0.36;
       const baseUpperRX = stride * armAmp + k * 0.36;
       const baseUpperLZ = -idleArmOut - k * 0.24;
