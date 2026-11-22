@@ -49,13 +49,14 @@ export class MultiplayerClient {
       seatIndex: null,
       hallSeatIndex: null,
       joinedAt: Date.now(),
-      stateUpdatedAt: Date.now()
+      stateSeq: 1
     };
 
-    // peerId -> { id, name, paletteIdx, x, z, yaw, posture, seatIndex, updatedAt }
+    // peerId -> { id, name, paletteIdx, x, z, yaw, posture, seatIndex, hallSeatIndex, stateSeq, updatedAt }
     this.peers = new Map();
     this.roomSummaries = [];
 
+    this.stateSeqCounter = 1;
     this.lastSentAt = 0;
     this.lastSentHash = '';
     this._onBeforeUnload = () => this.disconnect();
@@ -185,14 +186,14 @@ export class MultiplayerClient {
       incomingIds.add(p.id);
       const prev = this.peers.get(p.id);
       const isNew = !prev;
-      const prevTs = Number(prev?.stateUpdatedAt || 0);
-      const incomingTs = Number(p.stateUpdatedAt || 0);
+      const prevSeq = Number(prev?.stateSeq || 0);
+      const incomingSeq = Number(p.stateSeq || 0);
 
-      // 오래된 Presence 스냅샷이 최신 Broadcast 상태(위치·자세·방석)를 덮어쓰지 않도록 보호
+      // 기기 간 시계 오차 영향을 없애기 위해 송신자별 단조 증가 시퀀스(stateSeq)로만 최신 상태 판별
       const next =
-        prev && prevTs > incomingTs
+        prev && prevSeq > incomingSeq
           ? { ...p, ...prev, updatedAt: nowPerf }
-          : { ...prev, ...p, stateUpdatedAt: Math.max(prevTs, incomingTs), updatedAt: nowPerf };
+          : { ...prev, ...p, stateSeq: Math.max(prevSeq, incomingSeq), updatedAt: nowPerf };
 
       this.peers.set(p.id, next);
       if (isNew) {
@@ -236,8 +237,8 @@ export class MultiplayerClient {
 
     this.lastSentAt = now;
     this.lastSentHash = hash;
-    const stateUpdatedAt = Date.now();
-    this.selfState.stateUpdatedAt = stateUpdatedAt;
+    const stateSeq = ++this.stateSeqCounter;
+    this.selfState.stateSeq = stateSeq;
 
     const payload = {
       id: this.selfId,
@@ -250,7 +251,7 @@ export class MultiplayerClient {
       seatIndex: this.selfState.seatIndex,
       hallSeatIndex: this.selfState.hallSeatIndex,
       joinedAt: this.selfState.joinedAt,
-      stateUpdatedAt
+      stateSeq
     };
 
     this.transport?.sendState(payload, forceImmediate);

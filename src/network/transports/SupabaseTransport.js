@@ -11,6 +11,7 @@ export class SupabaseTransport {
     this.supabase = null;
     this.channel = null;
     this.roomSwitching = false;
+    this.syncTimer = null;
   }
 
   async connect() {
@@ -87,7 +88,7 @@ export class SupabaseTransport {
         seatIndex: c.selfState.seatIndex,
         hallSeatIndex: c.selfState.hallSeatIndex,
         joinedAt: c.selfState.joinedAt,
-        stateUpdatedAt: c.selfState.stateUpdatedAt || Date.now()
+        stateSeq: c.selfState.stateSeq || 1
       };
       channel.send({
         type: 'broadcast',
@@ -140,15 +141,15 @@ export class SupabaseTransport {
       .on('broadcast', { event: 'peer_state' }, ({ payload }) => {
         if (payload && payload.id && payload.id !== c.selfId) {
           const prev = c.peers.get(payload.id) || {};
-          const prevTs = Number(prev.stateUpdatedAt || 0);
-          const nextTs = Number(payload.stateUpdatedAt || 0);
-          if (prevTs > 0 && nextTs > 0 && nextTs < prevTs) {
+          const prevSeq = Number(prev.stateSeq || 0);
+          const nextSeq = Number(payload.stateSeq || 0);
+          if (prevSeq > 0 && nextSeq > 0 && nextSeq < prevSeq) {
             return;
           }
           const merged = {
             ...prev,
             ...payload,
-            stateUpdatedAt: Math.max(prevTs, nextTs, Date.now()),
+            stateSeq: Math.max(prevSeq, nextSeq),
             updatedAt: performance.now(),
             lastBroadcastAt: performance.now()
           };
@@ -191,7 +192,6 @@ export class SupabaseTransport {
           settled = true;
           clearTimeout(subTimer);
           try {
-            c.selfState.stateUpdatedAt = Date.now();
             await channel.track({ ...c.selfState });
             // 입장 직후 방 안의 모든 기존 접속자에게 현재 상태 동기화 요청 + 내 상태 1회 전파
             channel.send({
@@ -200,6 +200,10 @@ export class SupabaseTransport {
               payload: { senderId: c.selfId }
             });
             sendMyLatestState();
+            if (this.syncTimer) clearInterval(this.syncTimer);
+            this.syncTimer = setInterval(() => {
+              sendMyLatestState();
+            }, 4500);
             resolve();
           } catch (err) {
             reject(err);
@@ -216,6 +220,10 @@ export class SupabaseTransport {
   }
 
   disconnect() {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = null;
+    }
     if (this.channel && this.supabase) {
       try {
         this.supabase.removeChannel(this.channel);
