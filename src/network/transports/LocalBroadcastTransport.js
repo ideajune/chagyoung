@@ -3,7 +3,7 @@
  */
 
 import { NETWORK_CONFIG } from '../../config/networkConfig.js';
-import { WANDERER_POETIC_NAMES } from '../../config/constants.js';
+import { WANDERER_PALETTES, WANDERER_POETIC_NAMES } from '../../config/constants.js';
 
 export class LocalBroadcastTransport {
   constructor(client) {
@@ -95,6 +95,23 @@ export class LocalBroadcastTransport {
       if (availableName) {
         c.selfState.name = availableName;
         c.callbacks.onAssignedProfile?.({ name: availableName });
+      }
+    }
+
+    // 같은 산방 내 다른 접속자들과 겹치지 않는 도포 색상 자동 배정
+    const paletteCounts = new Array(WANDERER_PALETTES.length).fill(0);
+    for (const p of this.allPeers.values()) {
+      if (p.roomId === c.roomId && p.id !== c.selfId && Number.isInteger(p.paletteIdx)) {
+        paletteCounts[Math.abs(p.paletteIdx) % WANDERER_PALETTES.length] += 1;
+      }
+    }
+    const curPalette = Math.abs(Number(c.selfState.paletteIdx) || 0) % WANDERER_PALETTES.length;
+    const minCount = Math.min(...paletteCounts);
+    if (paletteCounts[curPalette] > minCount) {
+      const nextPalette = paletteCounts.findIndex((cnt) => cnt === minCount);
+      if (nextPalette >= 0 && nextPalette !== curPalette) {
+        c.selfState.paletteIdx = nextPalette;
+        c.callbacks.onAssignedProfile?.({ paletteIdx: nextPalette });
       }
     }
 

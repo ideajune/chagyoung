@@ -23,7 +23,7 @@ import {
   MAX_VISITORS_PER_ROOM,
   selectNearestHallCushion
 } from '../src/config/worldConfig.js';
-import { INITIAL_WISHES, WANDERER_POETIC_NAMES } from '../src/config/constants.js';
+import { INITIAL_WISHES, WANDERER_PALETTES, WANDERER_POETIC_NAMES } from '../src/config/constants.js';
 
 const { minX: WALK_MIN_X, maxX: WALK_MAX_X, minZ: WALK_MIN_Z, maxZ: WALK_MAX_Z } =
   COURTYARD_CONFIG.walkBounds.clamp;
@@ -155,6 +155,23 @@ function pickAvailableRoomId(preferredRoom = null) {
     rId++;
   }
   return 1;
+}
+
+function pickDistinctRoomPalette(roomMap, desiredIdx, selfId) {
+  const total = WANDERER_PALETTES.length || 4;
+  const counts = new Array(total).fill(0);
+  for (const [cid, session] of roomMap.entries()) {
+    if (cid !== selfId && Number.isInteger(session.player?.paletteIdx)) {
+      counts[Math.abs(session.player.paletteIdx) % total] += 1;
+    }
+  }
+  const normalized = Math.abs(Number(desiredIdx) || 0) % total;
+  const minCount = Math.min(...counts);
+  if (counts[normalized] <= minCount) {
+    return normalized;
+  }
+  const best = counts.findIndex((cnt) => cnt === minCount);
+  return best >= 0 ? best : normalized;
 }
 
 function ensureUniqueRoomNickname(roomMap, desiredName, selfId) {
@@ -330,11 +347,13 @@ function handleClientMessage(session, msg) {
         session.id
       );
 
+      const uniquePaletteIdx = pickDistinctRoomPalette(room, incoming.paletteIdx, session.id);
+
       session.roomId = assignedRoomId;
       session.player = {
         id: session.id,
         name: uniqueName,
-        paletteIdx: Math.abs(Number(incoming.paletteIdx) || 0) % 4,
+        paletteIdx: uniquePaletteIdx,
         x: Number.isFinite(incoming.x) ? clampServerX(incoming.x) : 0,
         z: Number.isFinite(incoming.z) ? clampServerZ(incoming.z) : 1.5,
         yaw: Number.isFinite(incoming.yaw) ? Number(incoming.yaw) : 0,
@@ -357,6 +376,7 @@ function handleClientMessage(session, msg) {
         selfId: session.id,
         roomId: assignedRoomId,
         assignedName: uniqueName,
+        assignedPaletteIdx: uniquePaletteIdx,
         seatIndex: null,
         hallSeatIndex: null,
         peers: peersInRoom,

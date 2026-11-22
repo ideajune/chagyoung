@@ -183,6 +183,10 @@ export class WebSocketTransport {
           c.selfState.name = msg.assignedName;
           c.callbacks.onAssignedProfile?.({ name: msg.assignedName });
         }
+        if (Number.isInteger(msg.assignedPaletteIdx) && msg.assignedPaletteIdx !== c.selfState.paletteIdx) {
+          c.selfState.paletteIdx = msg.assignedPaletteIdx;
+          c.callbacks.onAssignedProfile?.({ paletteIdx: msg.assignedPaletteIdx });
+        }
         if (Number.isInteger(msg.seatIndex) || msg.seatIndex === null) {
           c.selfState.seatIndex = msg.seatIndex;
         }
@@ -203,6 +207,10 @@ export class WebSocketTransport {
         if (msg.assignedName && msg.assignedName !== c.selfState.name) {
           c.selfState.name = msg.assignedName;
           c.callbacks.onAssignedProfile?.({ name: msg.assignedName });
+        }
+        if (Number.isInteger(msg.assignedPaletteIdx) && msg.assignedPaletteIdx !== c.selfState.paletteIdx) {
+          c.selfState.paletteIdx = msg.assignedPaletteIdx;
+          c.callbacks.onAssignedProfile?.({ paletteIdx: msg.assignedPaletteIdx });
         }
         c.selfState.seatIndex = Number.isInteger(msg.seatIndex) ? msg.seatIndex : null;
         c.selfState.hallSeatIndex = Number.isInteger(msg.hallSeatIndex) ? msg.hallSeatIndex : null;

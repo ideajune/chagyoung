@@ -3,6 +3,7 @@
  */
 
 import { NETWORK_CONFIG } from '../../config/networkConfig.js';
+import { WANDERER_PALETTES } from '../../config/constants.js';
 
 export class SupabaseTransport {
   constructor(client) {
@@ -15,6 +16,7 @@ export class SupabaseTransport {
     this.reconnectTimer = null;
     this._lastTrackKey = '';
     this._onVisibilityChange = null;
+    this._paletteResolvedForRoom = false;
   }
 
   async loadSupabaseModule() {
@@ -164,9 +166,31 @@ export class SupabaseTransport {
           }
         }
 
-        c.syncPeersSnapshot(peerEntries.filter((p) => p.id !== c.selfId), {
+        const otherPeers = peerEntries.filter((p) => p.id !== c.selfId);
+        c.syncPeersSnapshot(otherPeers, {
           preserveRecentBroadcastMs: 12000
         });
+        // 최초 입장 시 방 안에 이미 있는 접속자들과 옷 색상이 겹치면 미사용(최소 사용) 색상으로 자동 전환
+        if (!this._paletteResolvedForRoom && otherPeers.length > 0) {
+          this._paletteResolvedForRoom = true;
+          const total = WANDERER_PALETTES.length || 4;
+          const counts = new Array(total).fill(0);
+          for (const p of otherPeers) {
+            if (Number.isInteger(p.paletteIdx)) {
+              counts[Math.abs(p.paletteIdx) % total] += 1;
+            }
+          }
+          const curIdx = Math.abs(Number(c.selfState.paletteIdx) || 0) % total;
+          const minCnt = Math.min(...counts);
+          if (counts[curIdx] > minCnt) {
+            const distinctIdx = counts.findIndex((cnt) => cnt === minCnt);
+            if (distinctIdx >= 0 && distinctIdx !== curIdx) {
+              c.selfState.paletteIdx = distinctIdx;
+              c.callbacks.onAssignedProfile?.({ paletteIdx: distinctIdx });
+              c.publishSelfState({ paletteIdx: distinctIdx }, true);
+            }
+          }
+        }
         c.emitRoomUpdate();
       })
       .on('presence', { event: 'join' }, ({ key }) => {

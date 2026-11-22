@@ -143,13 +143,32 @@ export class WandererManager {
     };
   }
 
-  applyAssignedProfile({ name }) {
-    if (!name || typeof name !== 'string') return;
-    this.profile.name = name;
-    if (this.labelOverlay.selfLabel?.nameSpan) {
-      this.labelOverlay.selfLabel.nameSpan.textContent = name;
+  applyAssignedProfile({ name, paletteIdx }) {
+    let changed = false;
+    if (name && typeof name === 'string' && name !== this.profile.name) {
+      this.profile.name = name;
+      if (this.labelOverlay.selfLabel?.nameSpan) {
+        this.labelOverlay.selfLabel.nameSpan.textContent = name;
+      }
+      changed = true;
     }
-    this.notifySeatStateChanged();
+    if (
+      Number.isInteger(paletteIdx) &&
+      paletteIdx >= 0 &&
+      paletteIdx < WANDERER_PALETTES.length &&
+      !this.profile.userPickedPalette &&
+      paletteIdx !== this.profile.paletteIdx
+    ) {
+      this.profile.paletteIdx = paletteIdx;
+      this.saveProfile();
+      if (this.selfActor) {
+        applyWandererPalette(this.selfActor, this.currentPalette);
+      }
+      changed = true;
+    }
+    if (changed) {
+      this.notifySeatStateChanged();
+    }
   }
 
   publishImmediateSelfState() {
@@ -1292,6 +1311,7 @@ export class WandererManager {
 
   cyclePalette() {
     this.profile.paletteIdx = (this.profile.paletteIdx + 1) % WANDERER_PALETTES.length;
+    this.profile.userPickedPalette = true;
     this.saveProfile();
 
     if (this.selfActor) {
@@ -1553,17 +1573,29 @@ export class WandererManager {
           const dz = peer.targetPos.z - grp.position.z;
           const dist = Math.hypot(dx, dz);
 
+          let instantSpeed = 0;
           if (dist > 9.0) {
             grp.position.copy(peer.targetPos);
+            instantSpeed = 0;
           } else if (dist > 0.014) {
-            grp.position.x += dx * posBlend;
-            grp.position.z += dz * posBlend;
+            const stepX = dx * posBlend;
+            const stepZ = dz * posBlend;
+            grp.position.x += stepX;
+            grp.position.z += stepZ;
             grp.position.y = getGroundHeightAt(grp.position.x, grp.position.z);
-            remoteNormSpeed = Math.min(1, (dist * 3.8) / this.pcMoveSpeed);
+            instantSpeed = Math.hypot(stepX, stepZ) / Math.max(dt, 0.008);
           } else {
             const groundY = getGroundHeightAt(grp.position.x, grp.position.z);
             grp.position.y += (groundY - grp.position.y) * posBlend;
+            instantSpeed = 0;
           }
+
+          // 100ms 네트워크 패킷 간격 사이에서도 다리 움직임이 끊기지 않도록 실제 이동 속도를 부드럽게 유지
+          const velSmooth = 1 - Math.exp(-dt * (instantSpeed > 0.15 ? 14 : 9));
+          peer.smoothedMoveSpeed =
+            (peer.smoothedMoveSpeed || 0) + (instantSpeed - (peer.smoothedMoveSpeed || 0)) * velSmooth;
+          remoteNormSpeed =
+            peer.smoothedMoveSpeed > 0.08 ? Math.min(1.95, peer.smoothedMoveSpeed / 2.25) : 0;
 
           const yawDiff = Math.atan2(
             Math.sin(peer.targetYaw - grp.rotation.y),
@@ -1574,7 +1606,7 @@ export class WandererManager {
 
         peer.actor.update(elapsed + peer.animSeed, dt, remoteNormSpeed);
         if (peer.posture === 'walk' && remoteNormSpeed > 0.03) {
-          applyWiderWalkingStride(peer.actor, remoteNormSpeed);
+          applyWiderWalkingStride(peer.actor, Math.min(1.3, remoteNormSpeed));
         }
       }
     }

@@ -22,6 +22,7 @@ export function loadWandererProfile() {
         return {
           name: parsed.name,
           paletteIdx: parsed.v2Palette ? Math.abs(parsed.paletteIdx) % WANDERER_PALETTES.length : 0,
+          userPickedPalette: Boolean(parsed.userPickedPalette),
           v2Palette: true
         };
       }
@@ -31,9 +32,11 @@ export function loadWandererProfile() {
   }
 
   const randomIdx = Math.floor(Math.random() * WANDERER_POETIC_NAMES.length);
+  const randomPaletteIdx = Math.floor(Math.random() * WANDERER_PALETTES.length);
   const initial = {
     name: WANDERER_POETIC_NAMES[randomIdx],
-    paletteIdx: 0, // 기본 연옥빛 풍류 도포(시안 1)
+    paletteIdx: randomPaletteIdx,
+    userPickedPalette: false,
     v2Palette: true
   };
   saveWandererProfile(initial);
