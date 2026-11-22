@@ -12,8 +12,9 @@ export class SupabaseTransport {
     this.channel = null;
     this.roomSwitching = false;
     this.syncTimer = null;
+    this.reconnectTimer = null;
     this._lastTrackKey = '';
-    this._lastTrackAt = 0;
+    this._onVisibilityChange = null;
   }
 
   async loadSupabaseModule() {
@@ -121,9 +122,12 @@ export class SupabaseTransport {
 
     const pruneStalePeers = () => {
       const nowPerf = performance.now();
-      const timeoutMs = NETWORK_CONFIG.peerTimeoutMs || 14000;
+      const timeoutMs = 25000;
+      const presenceKeys = new Set(Object.keys(channel.presenceState() || {}));
       let removedAny = false;
       for (const [peerId, peer] of c.peers.entries()) {
+        // Presence에 여전히 살아있는 접속자는 삭제하지 않음
+        if (presenceKeys.has(peerId)) continue;
         if (peer?.updatedAt && nowPerf - peer.updatedAt > timeoutMs) {
           c.peers.delete(peerId);
           c.callbacks.onPeerLeft?.(peerId, peer);
@@ -161,7 +165,7 @@ export class SupabaseTransport {
         }
 
         c.syncPeersSnapshot(peerEntries.filter((p) => p.id !== c.selfId), {
-          preserveRecentBroadcastMs: 4500
+          preserveRecentBroadcastMs: 12000
         });
         c.emitRoomUpdate();
       })
@@ -238,13 +242,15 @@ export class SupabaseTransport {
       }, 15000);
 
       channel.subscribe(async (status) => {
-        if (settled) return;
         if (status === 'SUBSCRIBED') {
-          settled = true;
+          if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+          }
           clearTimeout(subTimer);
           try {
+            // 최초 접속뿐만 아니라 모바일/네트워크 재연결 시에도 항상 Presence 재등록 + 상태 동기화
             await channel.track({ ...c.selfState });
-            // 입장 직후 방 안의 모든 기존 접속자에게 현재 상태 동기화 요청 + 내 상태 1회 전파
             channel.send({
               type: 'broadcast',
               event: 'request_sync',
@@ -256,25 +262,74 @@ export class SupabaseTransport {
               sendMyLatestState();
               pruneStalePeers();
             }, 4500);
-            resolve();
+            c.connected = true;
+            c.emitRoomUpdate();
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
           } catch (err) {
-            reject(err);
+            if (!settled) {
+              settled = true;
+              reject(err);
+            }
           }
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          settled = true;
-          clearTimeout(subTimer);
-          reject(new Error(`Supabase channel status: ${status}`));
+          if (!settled) {
+            settled = true;
+            clearTimeout(subTimer);
+            reject(new Error(`Supabase channel status: ${status}`));
+            return;
+          }
+          // 초기 연결 이후 네트워크 단절 시 자동 재입장
+          if (!c.intentionalClose && this.channel === channel && !this.reconnectTimer) {
+            this.reconnectTimer = setTimeout(() => {
+              this.reconnectTimer = null;
+              if (!c.intentionalClose) {
+                this.joinRoom(c.roomId).catch(() => {});
+              }
+            }, 2500);
+          }
         }
       });
     });
 
     this.channel = channel;
+
+    if (typeof document !== 'undefined') {
+      if (this._onVisibilityChange) {
+        document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      }
+      this._onVisibilityChange = () => {
+        if (document.visibilityState === 'visible' && !c.intentionalClose) {
+          if (this.channel?.state === 'joined') {
+            this.channel.send({
+              type: 'broadcast',
+              event: 'request_sync',
+              payload: { senderId: c.selfId }
+            });
+            sendMyLatestState();
+          } else {
+            this.joinRoom(c.roomId).catch(() => {});
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+    }
   }
 
   disconnect() {
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
       this.syncTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (typeof document !== 'undefined' && this._onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      this._onVisibilityChange = null;
     }
     if (this.channel && this.supabase) {
       try {
@@ -299,12 +354,10 @@ export class SupabaseTransport {
       event: 'peer_state',
       payload: state
     });
-    const nowPerf = performance.now();
+    // Presence(track)는 과도한 Presence diff 유발을 막기 위해 자세·좌석·프로필 변경 시에만 갱신
     const trackKey = `${state.posture}|${state.seatIndex}|${state.hallSeatIndex}|${state.paletteIdx}|${state.name}`;
-    const shouldTrackByTime = nowPerf - this._lastTrackAt >= 900;
-    if (forceImmediate || trackKey !== this._lastTrackKey || shouldTrackByTime) {
+    if (forceImmediate || trackKey !== this._lastTrackKey) {
       this._lastTrackKey = trackKey;
-      this._lastTrackAt = nowPerf;
       this.channel.track(state).catch(() => {});
     }
   }
